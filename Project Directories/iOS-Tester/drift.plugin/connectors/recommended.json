@@ -1,0 +1,12 @@
+[
+  {
+    "name": "Figma MCP",
+    "reason": "Required for fetching design frames and design tokens",
+    "setup": "Connect via Claude Code MCP settings"
+  },
+  {
+    "name": "Refero MCP",
+    "reason": "Optional: reference screen library for visual matching",
+    "setup": "Connect via Claude Code MCP settings"
+  }
+]

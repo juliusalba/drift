@@ -1,0 +1,29 @@
+{
+  "name": "drift",
+  "version": "0.1.0",
+  "description": "Autonomous design-compliance QA for iOS apps. Builds, captures, compares to Figma designs, auto-fixes SwiftUI code, and loops until pixel-perfect.",
+  "skills": [
+    "skills/drift-check",
+    "skills/drift-fix",
+    "skills/drift-loop",
+    "skills/drift-report"
+  ],
+  "commands": [
+    "commands/check.md",
+    "commands/fix.md",
+    "commands/loop.md",
+    "commands/report.md"
+  ],
+  "connectors": {
+    "recommended": [
+      {
+        "name": "Figma MCP",
+        "reason": "Required for fetching design frames and design tokens"
+      },
+      {
+        "name": "Refero MCP",
+        "reason": "Optional: reference screen library for visual matching"
+      }
+    ]
+  }
+}
