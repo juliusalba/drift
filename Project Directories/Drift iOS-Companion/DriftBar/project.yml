@@ -1,0 +1,33 @@
+name: DriftBar
+options:
+  bundleIdPrefix: com.drift
+  deploymentTarget:
+    macOS: "14.0"
+  xcodeVersion: "16.0"
+  minimumXcodeGenVersion: "2.35"
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+
+targets:
+  DriftBar:
+    type: application
+    platform: macOS
+    sources:
+      - DriftBar
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.drift.bar
+        INFOPLIST_FILE: DriftBar/Info.plist
+        CODE_SIGN_ENTITLEMENTS: DriftBar/DriftBar.entitlements
+        PRODUCT_NAME: DriftBar
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: 1
+        GENERATE_INFOPLIST_FILE: false
+        CODE_SIGN_STYLE: Automatic
+        COMBINE_HIDPI_IMAGES: true
+        LD_RUNPATH_SEARCH_PATHS:
+          - $(inherited)
+          - "@executable_path/../Frameworks"

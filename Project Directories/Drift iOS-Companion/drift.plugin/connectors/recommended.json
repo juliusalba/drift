@@ -1,0 +1,22 @@
+[
+  {
+    "name": "Figma MCP",
+    "reason": "Required for fetching design frames and design tokens",
+    "setup": "Connect via Claude Code MCP settings",
+    "used_by": ["drift-check", "drift-fix", "drift-inspire"]
+  },
+  {
+    "name": "Refero MCP",
+    "reason": "Design inspiration from real-world app screens and flows",
+    "setup": "Connect via Claude Code MCP settings",
+    "tools": ["refero_search_screens", "refero_get_screen", "refero_search_flows", "refero_get_flow"],
+    "used_by": ["drift-inspire", "drift-assets", "drift-check"]
+  },
+  {
+    "name": "21st.dev Magic MCP",
+    "reason": "Production-ready component patterns and generation",
+    "setup": "Connect via Claude Code MCP settings",
+    "tools": ["21st_magic_component_builder", "21st_magic_component_inspiration"],
+    "used_by": ["drift-inspire"]
+  }
+]

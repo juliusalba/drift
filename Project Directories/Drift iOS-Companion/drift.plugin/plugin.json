@@ -1,0 +1,41 @@
+{
+  "name": "drift",
+  "version": "0.2.0",
+  "description": "Autonomous design-compliance QA and design co-pilot for iOS apps. Compares builds to Figma, auto-fixes SwiftUI code, sources design inspiration from real products, and processes stock photo assets with professional effects.",
+  "skills": [
+    "skills/drift-check",
+    "skills/drift-fix",
+    "skills/drift-loop",
+    "skills/drift-report",
+    "skills/drift-inspire",
+    "skills/drift-assets"
+  ],
+  "commands": [
+    "commands/check.md",
+    "commands/fix.md",
+    "commands/loop.md",
+    "commands/report.md",
+    "commands/inspire.md",
+    "commands/assets.md"
+  ],
+  "connectors": {
+    "recommended": [
+      {
+        "name": "Figma MCP",
+        "reason": "Required for fetching design frames and design tokens"
+      },
+      {
+        "name": "Refero MCP",
+        "reason": "Design inspiration from real-world apps (screens, flows, patterns)"
+      },
+      {
+        "name": "21st.dev Magic MCP",
+        "reason": "Production-ready component inspiration and generation"
+      }
+    ]
+  },
+  "requirements": {
+    "python": ["Pillow"],
+    "system": ["xcrun", "simctl"]
+  }
+}
