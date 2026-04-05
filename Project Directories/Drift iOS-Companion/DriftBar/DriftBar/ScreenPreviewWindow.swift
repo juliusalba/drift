@@ -1,7 +1,7 @@
 import SwiftUI
 import AppKit
 
-/// Full-screen preview of a screen screenshot with download support.
+/// Quick Look-style preview of a screen screenshot.
 struct ScreenPreviewView: View {
     let screenName: String
     let score: Double
@@ -10,34 +10,33 @@ struct ScreenPreviewView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Header bar
-            HStack {
+            // Header
+            HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(screenName)
                         .font(.system(size: 14, weight: .semibold))
-                    Text("\(Int(image.size.width))×\(Int(image.size.height))")
+                    Text("\(Int(image.size.width))×\(Int(image.size.height))px")
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(.secondary)
                 }
 
                 Spacer()
 
+                // Score
                 Text(scoreFormatted)
-                    .font(.system(size: 13, weight: .bold, design: .monospaced))
+                    .font(.system(size: 12, weight: .bold, design: .monospaced))
                     .foregroundStyle(scoreColor)
                     .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
+                    .padding(.vertical, 3)
                     .background(scoreColor.opacity(0.1))
                     .clipShape(Capsule())
 
-                // Download button
-                Button {
-                    saveToDownloads()
-                } label: {
+                // Save
+                Button { saveToDownloads() } label: {
                     HStack(spacing: 4) {
-                        Image(systemName: showSaved ? "checkmark.circle.fill" : "arrow.down.circle.fill")
-                            .font(.system(size: 12))
-                        Text(showSaved ? "Saved" : "Save JPEG")
+                        Image(systemName: showSaved ? "checkmark" : "arrow.down.to.line")
+                            .font(.system(size: 10, weight: .semibold))
+                        Text(showSaved ? "Saved" : "Save")
                             .font(.system(size: 11, weight: .medium))
                     }
                     .padding(.horizontal, 10)
@@ -47,27 +46,46 @@ struct ScreenPreviewView: View {
                     .clipShape(Capsule())
                 }
                 .buttonStyle(.plain)
+
+                // Close hint
+                Text("Space to close")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.quaternary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(Color.primary.opacity(0.04))
+                    .clipShape(Capsule())
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
 
-            Divider()
+            Divider().opacity(0.5)
 
-            // Image preview — scrollable and zoomable
-            ScrollView([.horizontal, .vertical]) {
-                Image(nsImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .padding(16)
+            // Image — centered, fits window, dark background
+            GeometryReader { geo in
+                let imgAspect = image.size.width / image.size.height
+                let containerAspect = geo.size.width / geo.size.height
+                let fitWidth = imgAspect > containerAspect
+
+                ZStack {
+                    Color.black.opacity(0.9)
+
+                    Image(nsImage: image)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(
+                            width: fitWidth ? geo.size.width - 32 : nil,
+                            height: fitWidth ? nil : geo.size.height - 32
+                        )
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .shadow(color: .black.opacity(0.5), radius: 20, y: 4)
+                }
+                .frame(width: geo.size.width, height: geo.size.height)
             }
-            .background(Color(nsColor: .controlBackgroundColor))
         }
     }
 
-    private var scoreFormatted: String {
-        "\(Int(score * 100))%"
-    }
+    private var scoreFormatted: String { "\(Int(score * 100))%" }
 
     private var scoreColor: Color {
         if score >= 0.9 { return .green }
@@ -76,8 +94,7 @@ struct ScreenPreviewView: View {
     }
 
     private func saveToDownloads() {
-        let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
-        guard let downloadsDir = downloads else { return }
+        guard let downloadsDir = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first else { return }
 
         let fileName = "\(screenName)_\(dateStamp()).jpg"
         let url = downloadsDir.appendingPathComponent(fileName)
@@ -89,13 +106,10 @@ struct ScreenPreviewView: View {
         do {
             try jpeg.write(to: url)
             showSaved = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                showSaved = false
-            }
-            // Bounce the Downloads folder in Dock
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { showSaved = false }
             NSWorkspace.shared.selectFile(url.path, inFileViewerRootedAtPath: downloadsDir.path)
         } catch {
-            // Silent fail
+            // Silent
         }
     }
 
@@ -106,45 +120,73 @@ struct ScreenPreviewView: View {
     }
 }
 
+// MARK: - Preview Window with Keyboard Support
+
+final class PreviewKeyWindow: NSWindow {
+    var onSpace: (() -> Void)?
+
+    override func keyDown(with event: NSEvent) {
+        // Space or Escape closes the preview
+        if event.keyCode == 49 || event.keyCode == 53 { // space = 49, esc = 53
+            onSpace?()
+        } else {
+            super.keyDown(with: event)
+        }
+    }
+
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
+}
+
 // MARK: - Window Manager
 
 final class ScreenPreviewWindowManager {
     static let shared = ScreenPreviewWindowManager()
-    private var windows: [String: NSWindow] = [:]
+    private var window: NSWindow?
 
     func open(screenName: String, score: Double, image: NSImage) {
-        // Close existing preview for this screen
-        if let existing = windows[screenName] {
-            existing.close()
-            windows[screenName] = nil
-        }
+        // Close any existing preview
+        close()
 
-        let previewView = ScreenPreviewView(screenName: screenName, score: score, image: image)
+        let previewView = ScreenPreviewView(
+            screenName: screenName,
+            score: score,
+            image: image
+        )
         let hostingView = NSHostingView(rootView: previewView)
 
-        // Size window to fit image aspect ratio, capped at screen size
+        // Size window to image aspect ratio
         let screenFrame = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 800, height: 600)
         let imgW = image.size.width
         let imgH = image.size.height
-        let maxW = min(imgW * 0.5, screenFrame.width * 0.7)
-        let scale = maxW / imgW
-        let winW = max(360, maxW)
-        let winH = min(max(400, imgH * scale + 50), screenFrame.height * 0.85)
+        let aspect = imgW / imgH
 
-        let w = NSWindow(
+        // For phone screenshots (portrait), make window tall
+        let winH = min(screenFrame.height * 0.8, 800.0)
+        let winW = max(360, min(winH * aspect + 40, screenFrame.width * 0.6))
+
+        let w = PreviewKeyWindow(
             contentRect: NSRect(x: 0, y: 0, width: winW, height: winH),
-            styleMask: [.titled, .closable, .resizable, .miniaturizable],
+            styleMask: [.titled, .closable, .resizable],
             backing: .buffered,
             defer: false
         )
-        w.title = "\(screenName) — Preview"
+        w.title = "\(screenName)"
         w.contentView = hostingView
-        w.minSize = NSSize(width: 320, height: 300)
+        w.minSize = NSSize(width: 280, height: 300)
         w.center()
         w.isReleasedWhenClosed = false
+        w.titlebarAppearsTransparent = true
+        w.backgroundColor = .black
+        w.onSpace = { [weak self] in self?.close() }
         w.makeKeyAndOrderFront(nil)
 
         NSApp.activate(ignoringOtherApps: true)
-        windows[screenName] = w
+        window = w
+    }
+
+    func close() {
+        window?.close()
+        window = nil
     }
 }

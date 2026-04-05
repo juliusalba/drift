@@ -419,7 +419,7 @@ struct MenuBarView: View {
             if !screen.discrepancies.isEmpty {
                 Button("Open Comparison Report") {
                     let img = service.findScreenshot(for: screen.name)
-                    ComparisonWindowManager.shared.open(screen: screen, image: img)
+                    ComparisonWindowManager.shared.open(screen: screen, image: img, service: service)
                 }
             }
             Divider()
@@ -502,6 +502,25 @@ struct MenuBarView: View {
                                     .lineLimit(1)
 
                                 Spacer()
+
+                                if disc.status == .open {
+                                    Button {
+                                        service.fixWithClaude(screen: screen, discrepancy: disc)
+                                    } label: {
+                                        HStack(spacing: 2) {
+                                            Image(systemName: "hammer.fill")
+                                                .font(.system(size: 7))
+                                            Text("Fix")
+                                                .font(.system(size: 8, weight: .medium))
+                                        }
+                                        .padding(.horizontal, 5)
+                                        .padding(.vertical, 2)
+                                        .background(Color.blue.opacity(0.1))
+                                        .foregroundStyle(.blue)
+                                        .clipShape(Capsule())
+                                    }
+                                    .buttonStyle(.plain)
+                                }
 
                                 Image(systemName: disc.status == .fixed ? "checkmark.circle.fill" : disc.status == .wontFix ? "minus.circle.fill" : "exclamationmark.circle")
                                     .font(.system(size: 10))

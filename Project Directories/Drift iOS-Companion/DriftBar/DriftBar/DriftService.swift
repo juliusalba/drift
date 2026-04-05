@@ -101,6 +101,7 @@ final class DriftService: ObservableObject {
 
         settings.watchedProjectPath = path
         reportsDir = URL(fileURLWithPath: path).appendingPathComponent("drift-reports", isDirectory: true)
+        clearScreenshotCache()
         saveSettings()
         loadReports()
         buildWatcher?.watchReports(at: path)
@@ -108,34 +109,45 @@ final class DriftService: ObservableObject {
 
     // MARK: - Screenshot Discovery
 
+    // Screenshot cache to avoid repeated disk I/O
+    private var screenshotCache: [String: NSImage?] = [:]
+
     /// Scan the project directory for simulator screenshots and match them to screens.
+    /// Results are cached per screen name.
     func findScreenshot(for screenName: String) -> NSImage? {
+        if let cached = screenshotCache[screenName] {
+            return cached
+        }
+
         guard !settings.watchedProjectPath.isEmpty else { return nil }
         let projectDir = settings.watchedProjectPath
 
-        // Try common naming patterns
         let candidates = [
-            // drift-reports screenshots
             "drift-reports/\(latestRun?.id ?? "")/screens/\(screenName).png",
             "drift-reports/\(latestRun?.id ?? "")/screens/\(screenName.lowercased()).png",
-            // sim_ prefixed screenshots in project root
             "sim_\(screenName.lowercased().replacingOccurrences(of: "view", with: "")).png",
             "sim_\(screenName.lowercased()).png",
-            // Direct name match
             "\(screenName).png",
             "\(screenName.lowercased()).png",
-            // Screenshot folder
             "Screenshots/\(screenName).png",
         ]
 
         for candidate in candidates {
             let path = (projectDir as NSString).appendingPathComponent(candidate)
-            if FileManager.default.fileExists(atPath: path) {
-                return NSImage(contentsOfFile: path)
+            if FileManager.default.fileExists(atPath: path),
+               let img = NSImage(contentsOfFile: path) {
+                screenshotCache[screenName] = img
+                return img
             }
         }
 
+        screenshotCache[screenName] = nil
         return nil
+    }
+
+    /// Clear screenshot cache (call when project changes or reports reload).
+    func clearScreenshotCache() {
+        screenshotCache.removeAll()
     }
 
     /// Get all screenshot files from the project directory.
@@ -254,6 +266,88 @@ final class DriftService: ObservableObject {
                 Iteration(number: 3, score: 0.87, delta: 0.05, fixed: 2, regressions: 0, timestamp: nil),
             ]
         )
+    }
+
+    // MARK: - Run Drift Check
+
+    // MARK: - Fix Actions
+
+    /// Copy a fix hint code snippet to clipboard.
+    func copyFix(_ discrepancy: Discrepancy) {
+        guard let hint = discrepancy.fixHint else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(hint, forType: .string)
+    }
+
+    /// Open Claude Code with a prompt to fix a specific discrepancy.
+    func fixWithClaude(screen: DriftScreen, discrepancy: Discrepancy) {
+        let projectPath = settings.watchedProjectPath
+        guard !projectPath.isEmpty else {
+            lastError = "No project selected"
+            return
+        }
+
+        var prompt = "In the file \(screen.filePath), fix the \(discrepancy.type.rawValue) issue on the \(discrepancy.element) element. "
+        prompt += "Expected: \(discrepancy.expected). Actual: \(discrepancy.actual). "
+        if let hint = discrepancy.fixHint {
+            prompt += "Suggested fix: \(hint). "
+        }
+        prompt += "Only change the visual property, don't modify any business logic."
+
+        openClaudeWithPrompt(prompt, in: projectPath)
+    }
+
+    /// Fix all open issues on a screen via Claude Code.
+    func fixAllWithClaude(screen: DriftScreen) {
+        let projectPath = settings.watchedProjectPath
+        guard !projectPath.isEmpty else { return }
+
+        let openIssues = screen.discrepancies.filter { $0.status == .open }
+        guard !openIssues.isEmpty else { return }
+
+        var prompt = "In \(screen.filePath), fix these design issues (visual properties only, no business logic changes):\n"
+        for (i, disc) in openIssues.enumerated() {
+            prompt += "\(i + 1). \(disc.type.rawValue) on \(disc.element): expected \(disc.expected), actual \(disc.actual)"
+            if let hint = disc.fixHint {
+                prompt += " — suggested: \(hint)"
+            }
+            prompt += "\n"
+        }
+
+        openClaudeWithPrompt(prompt, in: projectPath)
+    }
+
+    /// Write prompt to a temp file and open Claude Code via Terminal to avoid escaping issues.
+    private func openClaudeWithPrompt(_ prompt: String, in projectPath: String) {
+        // Write prompt to a temp file to avoid shell escaping issues
+        let tmpFile = FileManager.default.temporaryDirectory.appendingPathComponent("drift_fix_prompt.txt")
+        do {
+            try prompt.write(to: tmpFile, atomically: true, encoding: .utf8)
+        } catch {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(prompt, forType: .string)
+            lastError = "Fix prompt copied to clipboard."
+            return
+        }
+
+        let shellCmd = "cd '\(projectPath)' && claude \"$(cat '\(tmpFile.path)')\""
+
+        let appleScript = """
+        tell application "Terminal"
+            activate
+            do script "\(shellCmd.replacingOccurrences(of: "\"", with: "\\\""))"
+        end tell
+        """
+
+        var error: NSDictionary?
+        if let scriptObj = NSAppleScript(source: appleScript) {
+            scriptObj.executeAndReturnError(&error)
+            if error != nil {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(prompt, forType: .string)
+                lastError = "Couldn't open Terminal. Fix prompt copied to clipboard."
+            }
+        }
     }
 
     // MARK: - Run Drift Check
