@@ -106,6 +106,56 @@ final class DriftService: ObservableObject {
         buildWatcher?.watchReports(at: path)
     }
 
+    // MARK: - Screenshot Discovery
+
+    /// Scan the project directory for simulator screenshots and match them to screens.
+    func findScreenshot(for screenName: String) -> NSImage? {
+        guard !settings.watchedProjectPath.isEmpty else { return nil }
+        let projectDir = settings.watchedProjectPath
+
+        // Try common naming patterns
+        let candidates = [
+            // drift-reports screenshots
+            "drift-reports/\(latestRun?.id ?? "")/screens/\(screenName).png",
+            "drift-reports/\(latestRun?.id ?? "")/screens/\(screenName.lowercased()).png",
+            // sim_ prefixed screenshots in project root
+            "sim_\(screenName.lowercased().replacingOccurrences(of: "view", with: "")).png",
+            "sim_\(screenName.lowercased()).png",
+            // Direct name match
+            "\(screenName).png",
+            "\(screenName.lowercased()).png",
+            // Screenshot folder
+            "Screenshots/\(screenName).png",
+        ]
+
+        for candidate in candidates {
+            let path = (projectDir as NSString).appendingPathComponent(candidate)
+            if FileManager.default.fileExists(atPath: path) {
+                return NSImage(contentsOfFile: path)
+            }
+        }
+
+        return nil
+    }
+
+    /// Get all screenshot files from the project directory.
+    func allScreenshotPaths() -> [String: String] {
+        guard !settings.watchedProjectPath.isEmpty else { return [:] }
+        let dir = settings.watchedProjectPath
+        var result: [String: String] = [:]
+
+        guard let files = try? FileManager.default.contentsOfDirectory(atPath: dir) else { return [:] }
+        for file in files where file.hasSuffix(".png") && file.hasPrefix("sim_") {
+            // "sim_home.png" → key "home"
+            let name = file
+                .replacingOccurrences(of: "sim_", with: "")
+                .replacingOccurrences(of: ".png", with: "")
+            result[name] = (dir as NSString).appendingPathComponent(file)
+        }
+
+        return result
+    }
+
     // MARK: - Reports
 
     func loadReports() {
@@ -185,15 +235,15 @@ final class DriftService: ObservableObject {
                 status: .acceptable
             ),
             screens: [
-                DriftScreen(name: "HomeView", score: 0.95, filePath: "Sources/Views/HomeView.swift", discrepancies: []),
-                DriftScreen(name: "ProfileView", score: 0.92, filePath: "Sources/Views/ProfileView.swift", discrepancies: []),
-                DriftScreen(name: "SettingsView", score: 0.91, filePath: "Sources/Views/SettingsView.swift", discrepancies: []),
-                DriftScreen(name: "LoginView", score: 0.78, filePath: "Sources/Views/LoginView.swift", discrepancies: [
+                DriftScreen(name: "HomeView", score: 0.95, filePath: "TLSCompanion/Views/HomeView.swift", discrepancies: []),
+                DriftScreen(name: "LibraryView", score: 0.92, filePath: "TLSCompanion/Views/LibraryView.swift", discrepancies: []),
+                DriftScreen(name: "SettingsView", score: 0.91, filePath: "TLSCompanion/Views/SettingsView.swift", discrepancies: []),
+                DriftScreen(name: "OnboardingView", score: 0.78, filePath: "TLSCompanion/Views/OnboardingView.swift", discrepancies: [
                     Discrepancy(type: .color, severity: .major, element: "CTA Button", expected: "#377CC8", actual: "#3A7BC8", fixHint: ".foregroundColor(Color(hex: \"#377CC8\"))", status: .fixed, confidence: 0.85),
                     Discrepancy(type: .spacing, severity: .major, element: "Header padding", expected: "16pt", actual: "12pt", fixHint: ".padding(.top, 16)", status: .fixed, confidence: 0.9),
                     Discrepancy(type: .typography, severity: .minor, element: "Subtitle font", expected: "SF Pro Medium 14", actual: "SF Pro Regular 14", fixHint: ".font(.system(size: 14, weight: .medium))", status: .open, confidence: 0.72),
                 ]),
-                DriftScreen(name: "OnboardingView", score: 0.72, filePath: "Sources/Views/OnboardingView.swift", discrepancies: [
+                DriftScreen(name: "ShopView", score: 0.72, filePath: "TLSCompanion/Views/ShopView.swift", discrepancies: [
                     Discrepancy(type: .layout, severity: .major, element: "Card stack", expected: "Horizontal scroll", actual: "Vertical list", fixHint: nil, status: .open, confidence: 0.65),
                     Discrepancy(type: .spacing, severity: .minor, element: "Bottom CTA margin", expected: "24pt", actual: "20pt", fixHint: ".padding(.bottom, 24)", status: .fixed, confidence: 0.88),
                 ]),

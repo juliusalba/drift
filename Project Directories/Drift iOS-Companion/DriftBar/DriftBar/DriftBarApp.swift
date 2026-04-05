@@ -52,14 +52,15 @@ final class SettingsWindowManager: NSObject, NSWindowDelegate {
     private var window: NSWindow?
 
     func open(service: DriftService) {
-        // If window exists and is visible, just bring it forward
+        // Close the menu bar popover by removing focus from it
+        dismissMenuBarPopover()
+
         if let existing = window {
             if existing.isVisible {
                 existing.makeKeyAndOrderFront(nil)
                 NSApp.activate(ignoringOtherApps: true)
                 return
             }
-            // Window was closed — release it and create fresh
             window = nil
         }
 
@@ -67,25 +68,36 @@ final class SettingsWindowManager: NSObject, NSWindowDelegate {
         let hostingView = NSHostingView(rootView: settingsView)
 
         let w = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 500, height: 620),
+            contentRect: NSRect(x: 0, y: 0, width: 520, height: 640),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
         )
         w.title = "Drift Settings"
         w.contentView = hostingView
-        w.minSize = NSSize(width: 440, height: 480)
+        w.minSize = NSSize(width: 460, height: 500)
         w.center()
         w.isReleasedWhenClosed = false
         w.delegate = self
+        w.titlebarAppearsTransparent = true
+        w.backgroundColor = NSColor.windowBackgroundColor
         w.makeKeyAndOrderFront(nil)
 
         NSApp.activate(ignoringOtherApps: true)
         window = w
     }
 
-    // Release window reference when user closes it
     func windowWillClose(_ notification: Notification) {
         window = nil
+    }
+
+    private func dismissMenuBarPopover() {
+        // Find and close any MenuBarExtra popover windows
+        for win in NSApp.windows {
+            let typeName = String(describing: type(of: win))
+            if typeName.contains("StatusBar") || typeName.contains("MenuBarExtra") {
+                win.close()
+            }
+        }
     }
 }
