@@ -5,6 +5,15 @@ struct MenuBarView: View {
     @ObservedObject var service: DriftService
     @State private var selectedScreen: DriftScreen?
     @State private var hoveredScreen: String?
+    @State private var screenFilter: ScreenFilter = .all
+    @State private var showQuitConfirm = false
+
+    enum ScreenFilter: String, CaseIterable {
+        case all = "All"
+        case failing = "Failing"
+        case issues = "Has Issues"
+        case passing = "Passing"
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -21,6 +30,7 @@ struct MenuBarView: View {
                             .padding(.horizontal, 14)
                             .padding(.top, 12)
                             .padding(.bottom, 6)
+                            .transition(.opacity.combined(with: .scale(scale: 0.98)))
 
                         screenGrid(run: run)
                             .padding(.horizontal, 10)
@@ -30,15 +40,19 @@ struct MenuBarView: View {
                             screenDetail(screen: screen)
                                 .padding(.horizontal, 14)
                                 .padding(.bottom, 8)
+                                .transition(.opacity.combined(with: .move(edge: .top)))
                         }
                     } else if !service.settings.watchedProjectPath.isEmpty {
                         waitingState
                             .padding(.vertical, 24)
+                            .transition(.opacity)
                     } else {
                         onboardingState
                             .padding(.vertical, 16)
+                            .transition(.opacity)
                     }
                 }
+                .animation(.easeInOut(duration: 0.25), value: service.latestRun != nil)
             }
 
             Divider().opacity(0.5)
@@ -54,7 +68,6 @@ struct MenuBarView: View {
 
     private var header: some View {
         HStack(spacing: 10) {
-            // Logo
             ZStack {
                 RoundedRectangle(cornerRadius: 6)
                     .fill(.blue.opacity(0.15))
@@ -106,15 +119,20 @@ struct MenuBarView: View {
                     .clipShape(Capsule())
                 }
                 .buttonStyle(.plain)
-                .help(error)
+                .help(friendlyError(error))
             } else if let run = service.latestRun {
-                Text(run.summary.overallScore.scoreFormatted)
-                    .font(.system(size: 12, weight: .bold, design: .monospaced))
-                    .foregroundStyle(scoreColor(run.summary.overallScore))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(scoreColor(run.summary.overallScore).opacity(0.08))
-                    .clipShape(Capsule())
+                HStack(spacing: 4) {
+                    Image(systemName: statusSymbol(run.summary.overallScore))
+                        .font(.system(size: 9))
+                    Text(run.summary.overallScore.scoreFormatted)
+                        .font(.system(size: 12, weight: .bold, design: .monospaced))
+                }
+                .foregroundStyle(scoreColor(run.summary.overallScore))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(scoreColor(run.summary.overallScore).opacity(0.08))
+                .clipShape(Capsule())
+                .accessibilityLabel("Score: \(run.summary.overallScore.scoreFormatted), \(statusLabel(run.summary.overallScore))")
             }
         }
     }
@@ -127,7 +145,6 @@ struct MenuBarView: View {
 
     private func scoreHero(run: DriftRun) -> some View {
         HStack(spacing: 16) {
-            // Score ring
             ZStack {
                 Circle()
                     .stroke(Color.primary.opacity(0.05), lineWidth: 5)
@@ -151,8 +168,8 @@ struct MenuBarView: View {
                 }
             }
             .frame(width: 68, height: 68)
+            .accessibilityLabel("Overall score: \(run.summary.overallScore.scoreFormatted)")
 
-            // Stats
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 0) {
                     miniStat("\(run.summary.passingScreens)/\(run.summary.totalScreens)", label: "screens", color: .green)
@@ -162,7 +179,6 @@ struct MenuBarView: View {
                     miniStat("\(run.summary.totalIterations)", label: "iters", color: .primary)
                 }
 
-                // Issues bar
                 HStack(spacing: 4) {
                     let issues = run.summary.criticalIssues + run.summary.majorIssues
                     if issues > 0 {
@@ -201,22 +217,63 @@ struct MenuBarView: View {
     // MARK: - Screen Grid
 
     private func screenGrid(run: DriftRun) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text("Screens")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(.quaternary)
-                    .textCase(.uppercase)
+        let filteredScreens = run.screens.filter { screen in
+            switch screenFilter {
+            case .all: return true
+            case .failing: return screen.score < 0.7
+            case .issues: return !screen.discrepancies.filter({ $0.status == .open }).isEmpty
+            case .passing: return screen.score >= 0.9
+            }
+        }
+
+        return VStack(alignment: .leading, spacing: 6) {
+            // Filter bar
+            HStack(spacing: 0) {
+                ForEach(ScreenFilter.allCases, id: \.self) { filter in
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.15)) {
+                            screenFilter = filter
+                        }
+                    } label: {
+                        Text(filter.rawValue)
+                            .font(.system(size: 10, weight: screenFilter == filter ? .semibold : .regular))
+                            .foregroundStyle(screenFilter == filter ? .primary : .tertiary)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(screenFilter == filter ? Color.primary.opacity(0.06) : Color.clear)
+                            .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
                 Spacer()
+                Text("\(filteredScreens.count)/\(run.screens.count)")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.quaternary)
             }
             .padding(.horizontal, 6)
 
-            LazyVGrid(columns: [
-                GridItem(.flexible(), spacing: 6),
-                GridItem(.flexible(), spacing: 6),
-            ], spacing: 6) {
-                ForEach(run.screens) { screen in
-                    screenCard(screen: screen)
+            if filteredScreens.isEmpty {
+                HStack {
+                    Spacer()
+                    VStack(spacing: 4) {
+                        Image(systemName: "checkmark.circle")
+                            .font(.system(size: 16))
+                            .foregroundStyle(.tertiary)
+                        Text("No screens match this filter")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.tertiary)
+                    }
+                    .padding(.vertical, 20)
+                    Spacer()
+                }
+            } else {
+                LazyVGrid(columns: [
+                    GridItem(.flexible(), spacing: 6),
+                    GridItem(.flexible(), spacing: 6),
+                ], spacing: 6) {
+                    ForEach(filteredScreens) { screen in
+                        screenCard(screen: screen)
+                    }
                 }
             }
         }
@@ -226,156 +283,152 @@ struct MenuBarView: View {
         let isSelected = selectedScreen?.name == screen.name
         let isHovered = hoveredScreen == screen.name
         let openIssues = screen.discrepancies.filter { $0.status == .open }.count
+        let hasScreenshot = service.findScreenshot(for: screen.name) != nil
 
-        return Button {
+        return VStack(alignment: .leading, spacing: 0) {
+            // Preview
+            ZStack {
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color.primary.opacity(isHovered ? 0.05 : 0.025))
+
+                if let nsImage = service.findScreenshot(for: screen.name) {
+                    Image(nsImage: nsImage)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(height: 80)
+                        .clipped()
+                } else {
+                    VStack(spacing: 6) {
+                        Image(systemName: "camera.slash")
+                            .font(.system(size: 14))
+                            .foregroundStyle(.quaternary)
+                        Text("No screenshot")
+                            .font(.system(size: 8))
+                            .foregroundStyle(.quaternary)
+                    }
+                }
+
+                // Overlay
+                VStack {
+                    HStack {
+                        if isHovered && hasScreenshot {
+                            Button {
+                                if let img = service.findScreenshot(for: screen.name) {
+                                    ScreenPreviewWindowManager.shared.open(
+                                        screenName: screen.name,
+                                        score: screen.score,
+                                        image: img
+                                    )
+                                }
+                            } label: {
+                                HStack(spacing: 3) {
+                                    Image(systemName: "eye.fill")
+                                        .font(.system(size: 8))
+                                    Text("View")
+                                        .font(.system(size: 9, weight: .medium))
+                                }
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 3)
+                                .background(.ultraThinMaterial)
+                                .clipShape(Capsule())
+                            }
+                            .buttonStyle(.plain)
+                        }
+
+                        Spacer()
+
+                        HStack(spacing: 3) {
+                            Image(systemName: statusSymbol(screen.score))
+                                .font(.system(size: 7))
+                            Text(screen.score.scoreFormatted)
+                                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        }
+                        .foregroundStyle(scoreColor(screen.score))
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(.ultraThinMaterial)
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                    }
+                    .padding(5)
+                    Spacer()
+                }
+            }
+            .frame(height: 80)
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+
+            // Info
+            VStack(alignment: .leading, spacing: 2) {
+                Text(screen.name)
+                    .font(.system(size: 11, weight: .medium))
+                    .lineLimit(1)
+
+                HStack(spacing: 4) {
+                    Image(systemName: statusSymbol(screen.score))
+                        .font(.system(size: 7))
+                        .foregroundStyle(scoreColor(screen.score))
+                    if openIssues > 0 {
+                        Text("\(openIssues) issue\(openIssues == 1 ? "" : "s")")
+                            .font(.system(size: 9))
+                            .foregroundStyle(.orange)
+                    } else {
+                        Text("Passing")
+                            .font(.system(size: 9))
+                            .foregroundStyle(.green.opacity(0.8))
+                    }
+                }
+            }
+            .padding(.horizontal, 4)
+            .padding(.top, 5)
+            .padding(.bottom, 2)
+        }
+        .padding(6)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(isSelected ? Color.primary.opacity(0.06) : Color.clear)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(
+                    isSelected ? scoreColor(screen.score).opacity(0.3) : Color.primary.opacity(0.04),
+                    lineWidth: isSelected ? 1.5 : 0.5
+                )
+        )
+        .contentShape(Rectangle())
+        .onTapGesture {
             withAnimation(.easeInOut(duration: 0.15)) {
                 selectedScreen = isSelected ? nil : screen
             }
-        } label: {
-            VStack(alignment: .leading, spacing: 0) {
-                // Preview — real screenshot or fallback wireframe
-                ZStack {
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(Color.primary.opacity(isHovered ? 0.05 : 0.025))
-
-                    if let nsImage = service.findScreenshot(for: screen.name) {
-                        // Real screenshot
-                        Image(nsImage: nsImage)
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .frame(height: 80)
-                            .clipped()
-                    } else {
-                        // Wireframe fallback
-                        VStack(spacing: 3) {
-                            HStack {
-                                RoundedRectangle(cornerRadius: 1)
-                                    .fill(Color.primary.opacity(0.06))
-                                    .frame(width: 20, height: 3)
-                                Spacer()
-                                RoundedRectangle(cornerRadius: 1)
-                                    .fill(Color.primary.opacity(0.06))
-                                    .frame(width: 14, height: 3)
-                            }
-                            .padding(.horizontal, 6)
-                            .padding(.top, 5)
-
-                            RoundedRectangle(cornerRadius: 1.5)
-                                .fill(Color.primary.opacity(0.04))
-                                .frame(height: 4)
-                                .padding(.horizontal, 10)
-
-                            VStack(spacing: 3) {
-                                ForEach(0..<3, id: \.self) { i in
-                                    RoundedRectangle(cornerRadius: 1)
-                                        .fill(Color.primary.opacity(0.03))
-                                        .frame(height: 3)
-                                        .padding(.trailing, CGFloat(i) * 12)
-                                }
-                            }
-                            .padding(.horizontal, 8)
-                            .padding(.top, 2)
-
-                            Spacer()
-
-                            HStack(spacing: 8) {
-                                ForEach(0..<4, id: \.self) { _ in
-                                    Circle()
-                                        .fill(Color.primary.opacity(0.04))
-                                        .frame(width: 4, height: 4)
-                                }
-                            }
-                            .padding(.bottom, 5)
-                        }
-                    }
-
-                    // Score badge + View button overlay
-                    VStack {
-                        HStack {
-                            // View button (appears on hover)
-                            if isHovered, service.findScreenshot(for: screen.name) != nil {
-                                Button {
-                                    if let img = service.findScreenshot(for: screen.name) {
-                                        ScreenPreviewWindowManager.shared.open(
-                                            screenName: screen.name,
-                                            score: screen.score,
-                                            image: img
-                                        )
-                                    }
-                                } label: {
-                                    HStack(spacing: 3) {
-                                        Image(systemName: "eye.fill")
-                                            .font(.system(size: 8))
-                                        Text("View")
-                                            .font(.system(size: 9, weight: .medium))
-                                    }
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 3)
-                                    .background(.ultraThinMaterial)
-                                    .clipShape(Capsule())
-                                }
-                                .buttonStyle(.plain)
-                            }
-
-                            Spacer()
-
-                            Text(screen.score.scoreFormatted)
-                                .font(.system(size: 10, weight: .bold, design: .monospaced))
-                                .foregroundStyle(scoreColor(screen.score))
-                                .padding(.horizontal, 5)
-                                .padding(.vertical, 2)
-                                .background(.ultraThinMaterial)
-                                .clipShape(RoundedRectangle(cornerRadius: 4))
-                        }
-                        .padding(5)
-                        Spacer()
-                    }
-                }
-                .frame(height: 80)
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-
-                // Info
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(screen.name)
-                        .font(.system(size: 11, weight: .medium))
-                        .lineLimit(1)
-
-                    HStack(spacing: 4) {
-                        Circle()
-                            .fill(scoreColor(screen.score))
-                            .frame(width: 5, height: 5)
-                        if openIssues > 0 {
-                            Text("\(openIssues) issue\(openIssues == 1 ? "" : "s")")
-                                .font(.system(size: 9))
-                                .foregroundStyle(.orange)
-                        } else {
-                            Text("Passing")
-                                .font(.system(size: 9))
-                                .foregroundStyle(.green.opacity(0.8))
-                        }
-                    }
-                }
-                .padding(.horizontal, 4)
-                .padding(.top, 5)
-                .padding(.bottom, 2)
-            }
-            .padding(6)
-            .background(
-                RoundedRectangle(cornerRadius: 10)
-                    .fill(isSelected ? Color.primary.opacity(0.06) : Color.clear)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 10)
-                    .stroke(
-                        isSelected ? scoreColor(screen.score).opacity(0.3) : Color.primary.opacity(0.04),
-                        lineWidth: isSelected ? 1.5 : 0.5
-                    )
-            )
         }
-        .buttonStyle(.plain)
         .onHover { hovering in
-            hoveredScreen = hovering ? screen.name : nil
+            withAnimation(.easeInOut(duration: 0.1)) {
+                hoveredScreen = hovering ? screen.name : nil
+            }
         }
+        .contextMenu {
+            Button("Copy Score") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(screen.score.scoreFormatted, forType: .string)
+            }
+            if hasScreenshot {
+                Button("Preview Screenshot") {
+                    if let img = service.findScreenshot(for: screen.name) {
+                        ScreenPreviewWindowManager.shared.open(screenName: screen.name, score: screen.score, image: img)
+                    }
+                }
+            }
+            if !screen.discrepancies.isEmpty {
+                Button("Open Comparison Report") {
+                    let img = service.findScreenshot(for: screen.name)
+                    ComparisonWindowManager.shared.open(screen: screen, image: img)
+                }
+            }
+            Divider()
+            Button("Copy File Path") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(screen.filePath, forType: .string)
+            }
+        }
+        .accessibilityLabel("\(screen.name), score \(screen.score.scoreFormatted), \(openIssues) open issues")
     }
 
     // MARK: - Screen Detail
@@ -393,9 +446,24 @@ struct MenuBarView: View {
                         .truncationMode(.middle)
                 }
                 Spacer()
-                Text(screen.score.scoreFormatted)
-                    .font(.system(size: 16, weight: .bold, design: .monospaced))
-                    .foregroundStyle(scoreColor(screen.score))
+
+                HStack(spacing: 4) {
+                    Image(systemName: statusSymbol(screen.score))
+                        .font(.system(size: 10))
+                    Text(screen.score.scoreFormatted)
+                        .font(.system(size: 16, weight: .bold, design: .monospaced))
+                }
+                .foregroundStyle(scoreColor(screen.score))
+
+                // Close button
+                Button {
+                    withAnimation(.easeInOut(duration: 0.15)) { selectedScreen = nil }
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 14))
+                        .foregroundStyle(.quaternary)
+                }
+                .buttonStyle(.plain)
             }
 
             if screen.discrepancies.isEmpty {
@@ -408,54 +476,52 @@ struct MenuBarView: View {
                         .foregroundStyle(.secondary)
                 }
             } else {
-                ForEach(screen.discrepancies) { disc in
-                    HStack(spacing: 6) {
-                        Text(disc.severity.rawValue)
-                            .font(.system(size: 8, weight: .semibold))
-                            .textCase(.uppercase)
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 2)
-                            .background(severityColor(disc.severity).opacity(0.1))
-                            .foregroundStyle(severityColor(disc.severity))
-                            .clipShape(RoundedRectangle(cornerRadius: 4))
+                // Group by severity
+                let grouped = Dictionary(grouping: screen.discrepancies) { $0.severity }
+                let order: [Severity] = [.critical, .major, .minor, .cosmetic]
 
-                        Text(disc.type.rawValue)
-                            .font(.system(size: 9, design: .monospaced))
-                            .foregroundStyle(.quaternary)
+                ForEach(order, id: \.self) { severity in
+                    if let items = grouped[severity], !items.isEmpty {
+                        ForEach(items) { disc in
+                            HStack(spacing: 6) {
+                                Text(disc.severity.rawValue)
+                                    .font(.system(size: 8, weight: .semibold))
+                                    .textCase(.uppercase)
+                                    .padding(.horizontal, 5)
+                                    .padding(.vertical, 2)
+                                    .background(severityColor(disc.severity).opacity(0.1))
+                                    .foregroundStyle(severityColor(disc.severity))
+                                    .clipShape(RoundedRectangle(cornerRadius: 4))
 
-                        Text(disc.element)
-                            .font(.system(size: 11))
-                            .lineLimit(1)
+                                Text(disc.type.rawValue)
+                                    .font(.system(size: 9, design: .monospaced))
+                                    .foregroundStyle(.quaternary)
 
-                        Spacer()
+                                Text(disc.element)
+                                    .font(.system(size: 11))
+                                    .lineLimit(1)
 
-                        Image(systemName: disc.status == .fixed ? "checkmark.circle.fill" : "exclamationmark.circle")
-                            .font(.system(size: 10))
-                            .foregroundStyle(disc.status == .fixed ? .green : .orange)
-                    }
+                                Spacer()
 
-                    if let hint = disc.fixHint {
-                        Text(hint)
-                            .font(.system(size: 9, design: .monospaced))
-                            .foregroundStyle(.blue.opacity(0.6))
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 3)
-                            .background(Color.blue.opacity(0.04))
-                            .clipShape(RoundedRectangle(cornerRadius: 4))
-                            .padding(.leading, 16)
+                                Image(systemName: disc.status == .fixed ? "checkmark.circle.fill" : disc.status == .wontFix ? "minus.circle.fill" : "exclamationmark.circle")
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(disc.status == .fixed ? .green : disc.status == .wontFix ? .gray : .orange)
+                            }
+
+                            if let hint = disc.fixHint {
+                                Text(hint)
+                                    .font(.system(size: 9, design: .monospaced))
+                                    .foregroundStyle(.blue.opacity(0.6))
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 3)
+                                    .background(Color.blue.opacity(0.04))
+                                    .clipShape(RoundedRectangle(cornerRadius: 4))
+                                    .padding(.leading, 16)
+                            }
+                        }
                     }
                 }
             }
-
-            Button {
-                withAnimation { selectedScreen = nil }
-            } label: {
-                Text("Close")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.quaternary)
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.plain)
         }
         .padding(12)
         .background(
@@ -578,20 +644,19 @@ struct MenuBarView: View {
                         .font(.system(size: 11))
                         .lineLimit(1)
                 }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .background(Color.primary.opacity(0.001)) // invisible hit target
+                .clipShape(RoundedRectangle(cornerRadius: 6))
             }
-            .buttonStyle(.borderless)
+            .buttonStyle(.plain)
 
             Spacer()
 
             if !service.settings.watchedProjectPath.isEmpty {
-                Button {
+                ActionButton(icon: "arrow.clockwise", label: nil, help: "Reload reports") {
                     service.loadReports()
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 10))
                 }
-                .buttonStyle(.borderless)
-                .help("Reload reports")
 
                 Button {
                     service.runDriftCheck()
@@ -609,41 +674,70 @@ struct MenuBarView: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(service.isRunning)
-                .tint(.blue)
+                .help("Run drift-check (Cmd+R)")
             }
 
             Divider().frame(height: 12)
 
-            Button { openSettings() } label: {
-                Image(systemName: "gear")
-                    .font(.system(size: 11))
+            ActionButton(icon: "gear", label: nil, help: "Settings (Cmd+,)") {
+                SettingsWindowManager.shared.open(service: service)
             }
-            .buttonStyle(.borderless)
-            .help("Settings")
 
-            Button {
-                NSApplication.shared.terminate(nil)
-            } label: {
-                Image(systemName: "xmark.circle")
+            // Quit with confirmation
+            if showQuitConfirm {
+                HStack(spacing: 4) {
+                    Text("Quit?")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.red)
+                    Button("Yes") {
+                        NSApplication.shared.terminate(nil)
+                    }
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(.red)
+                    .buttonStyle(.plain)
+                    Button("No") {
+                        withAnimation { showQuitConfirm = false }
+                    }
                     .font(.system(size: 10))
-                    .foregroundStyle(.quaternary)
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .background(.red.opacity(0.08))
+                .clipShape(Capsule())
+                .transition(.opacity)
+            } else {
+                ActionButton(icon: "xmark.circle", label: nil, help: "Quit Drift") {
+                    withAnimation(.easeInOut(duration: 0.15)) { showQuitConfirm = true }
+                }
+                .foregroundStyle(.quaternary)
             }
-            .buttonStyle(.borderless)
-            .help("Quit Drift")
         }
     }
 
     // MARK: - Helpers
-
-    private func openSettings() {
-        SettingsWindowManager.shared.open(service: service)
-    }
 
     private func scoreColor(_ score: Double) -> Color {
         switch score.scoreColor {
         case .pass: return .green
         case .warning: return .yellow
         case .fail: return .red
+        }
+    }
+
+    private func statusSymbol(_ score: Double) -> String {
+        switch score.scoreColor {
+        case .pass: return "checkmark.circle.fill"
+        case .warning: return "exclamationmark.triangle.fill"
+        case .fail: return "xmark.circle.fill"
+        }
+    }
+
+    private func statusLabel(_ score: Double) -> String {
+        switch score.scoreColor {
+        case .pass: return "Passing"
+        case .warning: return "Needs review"
+        case .fail: return "Failing"
         }
     }
 
@@ -655,6 +749,47 @@ struct MenuBarView: View {
         case .cosmetic: return .gray
         }
     }
+
+    private func friendlyError(_ raw: String) -> String {
+        if raw.contains("not found") || raw.contains("command not found") {
+            return "Claude Code CLI not found. Make sure it's installed."
+        }
+        if raw.contains("No such file") {
+            return "Project path is invalid. Reselect your project."
+        }
+        return raw.components(separatedBy: "\n").first ?? raw
+    }
+}
+
+// MARK: - Action Button with hover
+
+struct ActionButton: View {
+    let icon: String
+    let label: String?
+    let help: String
+    let action: () -> Void
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 3) {
+                Image(systemName: icon)
+                    .font(.system(size: 11))
+                if let label {
+                    Text(label)
+                        .font(.system(size: 11))
+                }
+            }
+            .padding(4)
+            .background(isHovered ? Color.primary.opacity(0.06) : Color.clear)
+            .clipShape(RoundedRectangle(cornerRadius: 5))
+        }
+        .buttonStyle(.plain)
+        .help(help)
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.1)) { isHovered = hovering }
+        }
+    }
 }
 
 // MARK: - Status Badge
@@ -663,13 +798,18 @@ struct StatusBadge: View {
     let status: RunStatus
 
     var body: some View {
-        Text(label)
-            .font(.system(size: 9, weight: .medium))
-            .padding(.horizontal, 7)
-            .padding(.vertical, 2)
-            .background(bgColor.opacity(0.1))
-            .foregroundStyle(bgColor)
-            .clipShape(Capsule())
+        HStack(spacing: 3) {
+            Image(systemName: symbol)
+                .font(.system(size: 7))
+            Text(label)
+                .font(.system(size: 9, weight: .medium))
+        }
+        .padding(.horizontal, 7)
+        .padding(.vertical, 2)
+        .background(bgColor.opacity(0.1))
+        .foregroundStyle(bgColor)
+        .clipShape(Capsule())
+        .accessibilityLabel("Status: \(label)")
     }
 
     private var label: String {
@@ -680,6 +820,17 @@ struct StatusBadge: View {
         case .fail: return "Failed"
         case .inProgress: return "Running"
         case .unknown: return "Unknown"
+        }
+    }
+
+    private var symbol: String {
+        switch status {
+        case .pass: return "checkmark.circle.fill"
+        case .acceptable: return "checkmark.circle"
+        case .needsReview: return "exclamationmark.triangle.fill"
+        case .fail: return "xmark.circle.fill"
+        case .inProgress: return "arrow.triangle.2.circlepath"
+        case .unknown: return "questionmark.circle"
         }
     }
 

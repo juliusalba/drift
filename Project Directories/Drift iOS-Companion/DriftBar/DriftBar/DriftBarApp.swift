@@ -43,6 +43,15 @@ struct MenuBarLabel: View {
         case .fail: return .red
         }
     }
+
+    private var statusText: String {
+        guard let run = service.latestRun else { return "No data" }
+        return "Score: \(run.summary.overallScore.scoreFormatted)"
+    }
+}
+
+extension MenuBarLabel {
+    var accessibilityDescription: String { statusText }
 }
 
 // MARK: - Settings Window Manager
@@ -79,7 +88,6 @@ final class SettingsWindowManager: NSObject, NSWindowDelegate {
         w.center()
         w.isReleasedWhenClosed = false
         w.delegate = self
-        w.titlebarAppearsTransparent = true
         w.backgroundColor = NSColor.windowBackgroundColor
         w.makeKeyAndOrderFront(nil)
 

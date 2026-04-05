@@ -262,51 +262,29 @@ final class DriftService: ObservableObject {
         guard !isRunning else { return }
         guard !settings.watchedProjectPath.isEmpty else { return }
 
-        isRunning = true
-        currentPhase = "Starting analysis..."
-        lastError = nil
-
+        // Try to open Claude Code in the project directory instead of running headlessly.
+        // The --print flag has compatibility issues, so we open Claude Code interactively.
         let projectPath = settings.watchedProjectPath
 
-        Task.detached {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-            process.arguments = ["-l", "-c", "cd \"\(projectPath)\" && claude --print \"Run /drift-check on this project\""]
+        // Copy the command to clipboard for easy pasting
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString("/drift-check", forType: .string)
 
-            let outPipe = Pipe()
-            let errPipe = Pipe()
-            process.standardOutput = outPipe
-            process.standardError = errPipe
+        // Try opening Claude Code (the desktop app) with the project
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.arguments = ["-l", "-c", "cd \"\(projectPath)\" && open -a 'Claude' . 2>/dev/null || claude 2>/dev/null &"]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
 
-            var exitCode: Int32 = -1
-            var errorOutput = ""
-
-            do {
-                try process.run()
-                process.waitUntilExit()
-                exitCode = process.terminationStatus
-                errorOutput = String(data: errPipe.fileHandleForReading.availableData, encoding: .utf8) ?? ""
-            } catch {
-                errorOutput = error.localizedDescription
+        do {
+            try process.run()
+            currentPhase = "/drift-check copied to clipboard"
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+                self?.currentPhase = nil
             }
-
-            let finalExitCode = exitCode
-            let finalErrorOutput = errorOutput
-
-            await MainActor.run { [weak self] in
-                self?.isRunning = false
-                if finalExitCode != 0 && !finalErrorOutput.isEmpty {
-                    let shortError = finalErrorOutput.components(separatedBy: "\n")
-                        .filter { !$0.isEmpty }
-                        .prefix(3)
-                        .joined(separator: "\n")
-                    self?.lastError = shortError.isEmpty ? "Command failed (exit \(finalExitCode))" : shortError
-                    self?.currentPhase = "Failed"
-                } else {
-                    self?.currentPhase = nil
-                    self?.loadReports()
-                }
-            }
+        } catch {
+            lastError = "Open Claude Code and run /drift-check in your project"
         }
     }
 }
