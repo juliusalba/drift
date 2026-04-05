@@ -8,6 +8,7 @@ final class DriftService: ObservableObject {
     @Published var runHistory: [RunIndexEntry] = []
     @Published var isRunning = false
     @Published var currentPhase: String?
+    @Published var lastError: String?
     @Published var settings = DriftSettings()
 
     private let settingsURL: URL
@@ -15,7 +16,8 @@ final class DriftService: ObservableObject {
     private var buildWatcher: BuildWatcher?
 
     init() {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
+            .first ?? FileManager.default.temporaryDirectory
         let driftDir = appSupport.appendingPathComponent("DriftBar", isDirectory: true)
         try? FileManager.default.createDirectory(at: driftDir, withIntermediateDirectories: true)
         settingsURL = driftDir.appendingPathComponent("settings.json")
@@ -90,6 +92,13 @@ final class DriftService: ObservableObject {
     }
 
     func setProjectPath(_ path: String) {
+        // Validate path exists and is a directory
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: path, isDirectory: &isDir), isDir.boolValue else {
+            lastError = "Invalid project path: \(path)"
+            return
+        }
+
         settings.watchedProjectPath = path
         reportsDir = URL(fileURLWithPath: path).appendingPathComponent("drift-reports", isDirectory: true)
         saveSettings()
@@ -205,30 +214,48 @@ final class DriftService: ObservableObject {
 
         isRunning = true
         currentPhase = "Starting analysis..."
+        lastError = nil
 
         let projectPath = settings.watchedProjectPath
 
         Task.detached {
-            // Use login shell to inherit user's PATH (so `claude` CLI is findable)
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-            process.arguments = ["-l", "-c", "cd \"\(projectPath)\" && claude -p \"Run /drift-check on this project\""]
+            process.arguments = ["-l", "-c", "cd \"\(projectPath)\" && claude --print \"Run /drift-check on this project\""]
 
-            let pipe = Pipe()
-            process.standardOutput = pipe
-            process.standardError = pipe
+            let outPipe = Pipe()
+            let errPipe = Pipe()
+            process.standardOutput = outPipe
+            process.standardError = errPipe
+
+            var exitCode: Int32 = -1
+            var errorOutput = ""
 
             do {
                 try process.run()
                 process.waitUntilExit()
+                exitCode = process.terminationStatus
+                errorOutput = String(data: errPipe.fileHandleForReading.availableData, encoding: .utf8) ?? ""
             } catch {
-                // CLI not available
+                errorOutput = error.localizedDescription
             }
+
+            let finalExitCode = exitCode
+            let finalErrorOutput = errorOutput
 
             await MainActor.run { [weak self] in
                 self?.isRunning = false
-                self?.currentPhase = nil
-                self?.loadReports()
+                if finalExitCode != 0 && !finalErrorOutput.isEmpty {
+                    let shortError = finalErrorOutput.components(separatedBy: "\n")
+                        .filter { !$0.isEmpty }
+                        .prefix(3)
+                        .joined(separator: "\n")
+                    self?.lastError = shortError.isEmpty ? "Command failed (exit \(finalExitCode))" : shortError
+                    self?.currentPhase = "Failed"
+                } else {
+                    self?.currentPhase = nil
+                    self?.loadReports()
+                }
             }
         }
     }

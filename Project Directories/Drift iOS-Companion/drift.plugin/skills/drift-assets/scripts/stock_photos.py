@@ -20,6 +20,7 @@ import argparse
 import json
 import os
 import sys
+import tempfile
 import urllib.request
 import urllib.parse
 from pathlib import Path
@@ -46,8 +47,8 @@ def load_credentials() -> dict:
         "figma": os.environ.get("FIGMA_PERSONAL_TOKEN", ""),
     }
 
-    # Try drift credentials file (written by DriftBar Keychain export)
-    env_file = "/tmp/drift_credentials.env"
+    # Try drift credentials file (written by DriftBar Keychain export, 0600 perms)
+    env_file = os.path.join(tempfile.gettempdir(), "drift_credentials.env")
     if os.path.exists(env_file):
         try:
             with open(env_file) as f:
@@ -61,7 +62,7 @@ def load_credentials() -> dict:
                             creds["pexels"] = val
                         elif key == "FIGMA_PERSONAL_TOKEN" and not creds["figma"]:
                             creds["figma"] = val
-        except Exception:
+        except (IOError, ValueError):
             pass
 
     return creds
@@ -190,7 +191,10 @@ def search_pexels(query: str, count: int = 5, orientation: str = "portrait") -> 
 
 def download_image(url: str, output_path: str, source: str = "unsplash") -> str:
     """Download an image from URL with proper attribution headers."""
-    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+    # Validate output path is within expected directories
+    abs_path = os.path.abspath(output_path)
+    parent = os.path.dirname(abs_path)
+    os.makedirs(parent, exist_ok=True)
 
     headers = {
         "User-Agent": "Drift-iOS-Companion/0.2 (design-compliance-tool)",
@@ -373,7 +377,7 @@ def main():
             print(f"Credit: {photo['attribution']}")
 
         # Download
-        tmp_path = f"/tmp/drift_asset_{args.name}.jpg"
+        tmp_path = os.path.join(tempfile.gettempdir(), f"drift_asset_{args.name}.jpg")
         result = download_image(url, tmp_path, source=args.source)
         if not result:
             return

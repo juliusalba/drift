@@ -28,7 +28,7 @@ struct MenuBarView: View {
             Divider()
             actionsBar
         }
-        .frame(width: 440)
+        .frame(width: 420, height: 580)
     }
 
     // MARK: - Header
@@ -65,6 +65,24 @@ struct MenuBarView: View {
                 .padding(.vertical, 4)
                 .background(.ultraThinMaterial)
                 .clipShape(Capsule())
+            } else if let error = service.lastError {
+                Button {
+                    service.lastError = nil
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 9))
+                        Text("Error")
+                            .font(.system(size: 10, weight: .medium))
+                    }
+                    .foregroundStyle(.red)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(.red.opacity(0.1))
+                    .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .help(error)
             } else if let run = service.latestRun {
                 // Mini score pill in header
                 Text(run.summary.overallScore.scoreFormatted)
@@ -179,7 +197,7 @@ struct MenuBarView: View {
                 .padding(.horizontal, 12)
                 .padding(.bottom, 8)
             }
-            .frame(maxHeight: 220)
+            .frame(maxHeight: 320)
         }
     }
 
@@ -193,58 +211,104 @@ struct MenuBarView: View {
                 selectedScreen = isSelected ? nil : screen
             }
         } label: {
-            VStack(alignment: .leading, spacing: 6) {
-                // Top row: icon + score
-                HStack {
-                    // Score dot
-                    Circle()
-                        .fill(scoreColor(screen.score))
-                        .frame(width: 7, height: 7)
+            VStack(alignment: .leading, spacing: 0) {
+                // Preview area (mock phone screen)
+                ZStack {
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(Color.primary.opacity(0.03))
 
-                    Spacer()
+                    VStack(spacing: 3) {
+                        // Mock status bar
+                        HStack {
+                            RoundedRectangle(cornerRadius: 1)
+                                .fill(Color.primary.opacity(0.08))
+                                .frame(width: 20, height: 3)
+                            Spacer()
+                            RoundedRectangle(cornerRadius: 1)
+                                .fill(Color.primary.opacity(0.08))
+                                .frame(width: 14, height: 3)
+                        }
+                        .padding(.horizontal, 6)
+                        .padding(.top, 5)
 
-                    // Score
-                    Text(screen.score.scoreFormatted)
-                        .font(.system(size: 11, weight: .bold, design: .monospaced))
-                        .foregroundStyle(scoreColor(screen.score))
-                }
-
-                Spacer()
-
-                // Screen name
-                Text(screen.name)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-
-                // Subtitle
-                HStack(spacing: 4) {
-                    if openIssues > 0 {
-                        Text("\(openIssues) issue\(openIssues == 1 ? "" : "s")")
-                            .font(.system(size: 9))
-                            .foregroundStyle(.orange)
-                    } else {
-                        Text("No issues")
-                            .font(.system(size: 9))
-                            .foregroundStyle(.green.opacity(0.8))
-                    }
-                }
-
-                // Mini progress bar
-                GeometryReader { geo in
-                    ZStack(alignment: .leading) {
+                        // Mock nav bar
                         RoundedRectangle(cornerRadius: 1.5)
                             .fill(Color.primary.opacity(0.06))
-                            .frame(height: 3)
-                        RoundedRectangle(cornerRadius: 1.5)
-                            .fill(scoreColor(screen.score))
-                            .frame(width: geo.size.width * screen.score, height: 3)
+                            .frame(height: 4)
+                            .padding(.horizontal, 10)
+
+                        // Mock content lines
+                        VStack(spacing: 3) {
+                            ForEach(0..<3, id: \.self) { i in
+                                RoundedRectangle(cornerRadius: 1)
+                                    .fill(Color.primary.opacity(0.04))
+                                    .frame(height: 3)
+                                    .padding(.trailing, CGFloat(i) * 12)
+                            }
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.top, 2)
+
+                        Spacer()
+
+                        // Mock bottom bar
+                        HStack(spacing: 8) {
+                            ForEach(0..<4, id: \.self) { _ in
+                                Circle()
+                                    .fill(Color.primary.opacity(0.05))
+                                    .frame(width: 5, height: 5)
+                            }
+                        }
+                        .padding(.bottom, 5)
+                    }
+
+                    // Score overlay
+                    VStack {
+                        HStack {
+                            Spacer()
+                            Text(screen.score.scoreFormatted)
+                                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                                .foregroundStyle(scoreColor(screen.score))
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 2)
+                                .background(Color(nsColor: .windowBackgroundColor).opacity(0.85))
+                                .clipShape(RoundedRectangle(cornerRadius: 4))
+                        }
+                        .padding(5)
+                        Spacer()
                     }
                 }
-                .frame(height: 3)
+                .frame(height: 80)
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+
+                // Info area
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(screen.name)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(scoreColor(screen.score))
+                            .frame(width: 5, height: 5)
+                        if openIssues > 0 {
+                            Text("\(openIssues) issue\(openIssues == 1 ? "" : "s")")
+                                .font(.system(size: 9))
+                                .foregroundStyle(.orange)
+                        } else {
+                            Text("Passing")
+                                .font(.system(size: 9))
+                                .foregroundStyle(.green.opacity(0.8))
+                        }
+                    }
+                }
+                .padding(.horizontal, 4)
+                .padding(.top, 6)
+                .padding(.bottom, 2)
             }
-            .padding(10)
-            .frame(height: 90)
+            .padding(8)
+            .frame(height: 130)
             .background(
                 RoundedRectangle(cornerRadius: 10)
                     .fill(isSelected
@@ -450,12 +514,14 @@ struct MenuBarView: View {
             }
             .padding(.horizontal, 16)
 
+            #if DEBUG
             Button("Load Sample Data") {
                 service.loadSampleData()
             }
             .buttonStyle(.borderless)
             .font(.system(size: 11))
             .tint(.blue)
+            #endif
         }
         .padding(.vertical, 16)
     }
@@ -533,9 +599,7 @@ struct MenuBarView: View {
     // MARK: - Helpers
 
     private func openSettings() {
-        NSApp.activate(ignoringOtherApps: true)
-        if NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil) { return }
-        NSApp.sendAction(Selector(("showPreferencesWindow:")), to: nil, from: nil)
+        SettingsWindowManager.shared.open(service: service)
     }
 
     private func scoreColor(_ score: Double) -> Color {
