@@ -57,7 +57,7 @@ final class DriftService: ObservableObject {
 
     // MARK: - Settings
 
-    private func loadSettings() {
+    func loadSettings() {
         guard let data = try? Data(contentsOf: settingsURL),
               let loaded = try? JSONDecoder().decode(DriftSettings.self, from: data) else { return }
         settings = loaded
@@ -71,7 +71,6 @@ final class DriftService: ObservableObject {
     // MARK: - Project Selection
 
     func selectProject() {
-        // NSOpenPanel needs the app to be active to show properly from menu bar
         NSApp.activate(ignoringOtherApps: true)
 
         let panel = NSOpenPanel()
@@ -80,7 +79,7 @@ final class DriftService: ObservableObject {
         panel.allowsMultipleSelection = false
         panel.message = "Select your iOS project folder"
         panel.prompt = "Select"
-        panel.level = .floating // Ensure it appears above everything
+        panel.level = .floating
 
         panel.begin { [weak self] response in
             guard response == .OK, let url = panel.url else { return }
@@ -103,7 +102,6 @@ final class DriftService: ObservableObject {
     func loadReports() {
         guard let dir = reportsDir else { return }
 
-        // Try index first
         let indexURL = dir.appendingPathComponent("index.json")
         if let data = try? Data(contentsOf: indexURL),
            let index = try? JSONDecoder().decode(RunIndex.self, from: data) {
@@ -112,7 +110,6 @@ final class DriftService: ObservableObject {
             scanForRuns(in: dir)
         }
 
-        // Load latest run
         if let latest = runHistory.sorted(by: { $0.timestamp > $1.timestamp }).first {
             loadRun(id: latest.id)
         }
@@ -158,6 +155,48 @@ final class DriftService: ObservableObject {
         }
     }
 
+    // MARK: - Sample Data (for testing UI without real reports)
+
+    func loadSampleData() {
+        latestRun = DriftRun(
+            id: "run-001",
+            projectName: settings.watchedProjectPath.isEmpty
+                ? "SampleApp"
+                : URL(fileURLWithPath: settings.watchedProjectPath).lastPathComponent,
+            timestamp: ISO8601DateFormatter().string(from: Date()),
+            summary: RunSummary(
+                overallScore: 0.87,
+                totalScreens: 6,
+                passingScreens: 4,
+                reviewScreens: 2,
+                criticalIssues: 0,
+                majorIssues: 3,
+                autoFixed: 5,
+                totalIterations: 3,
+                status: .acceptable
+            ),
+            screens: [
+                DriftScreen(name: "HomeView", score: 0.95, filePath: "Sources/Views/HomeView.swift", discrepancies: []),
+                DriftScreen(name: "ProfileView", score: 0.92, filePath: "Sources/Views/ProfileView.swift", discrepancies: []),
+                DriftScreen(name: "SettingsView", score: 0.91, filePath: "Sources/Views/SettingsView.swift", discrepancies: []),
+                DriftScreen(name: "LoginView", score: 0.78, filePath: "Sources/Views/LoginView.swift", discrepancies: [
+                    Discrepancy(type: .color, severity: .major, element: "CTA Button", expected: "#377CC8", actual: "#3A7BC8", fixHint: ".foregroundColor(Color(hex: \"#377CC8\"))", status: .fixed, confidence: 0.85),
+                    Discrepancy(type: .spacing, severity: .major, element: "Header padding", expected: "16pt", actual: "12pt", fixHint: ".padding(.top, 16)", status: .fixed, confidence: 0.9),
+                    Discrepancy(type: .typography, severity: .minor, element: "Subtitle font", expected: "SF Pro Medium 14", actual: "SF Pro Regular 14", fixHint: ".font(.system(size: 14, weight: .medium))", status: .open, confidence: 0.72),
+                ]),
+                DriftScreen(name: "OnboardingView", score: 0.72, filePath: "Sources/Views/OnboardingView.swift", discrepancies: [
+                    Discrepancy(type: .layout, severity: .major, element: "Card stack", expected: "Horizontal scroll", actual: "Vertical list", fixHint: nil, status: .open, confidence: 0.65),
+                    Discrepancy(type: .spacing, severity: .minor, element: "Bottom CTA margin", expected: "24pt", actual: "20pt", fixHint: ".padding(.bottom, 24)", status: .fixed, confidence: 0.88),
+                ]),
+            ],
+            iterations: [
+                Iteration(number: 1, score: 0.71, delta: 0, fixed: 0, regressions: 0, timestamp: nil),
+                Iteration(number: 2, score: 0.82, delta: 0.11, fixed: 3, regressions: 0, timestamp: nil),
+                Iteration(number: 3, score: 0.87, delta: 0.05, fixed: 2, regressions: 0, timestamp: nil),
+            ]
+        )
+    }
+
     // MARK: - Run Drift Check
 
     func runDriftCheck() {
@@ -170,10 +209,10 @@ final class DriftService: ObservableObject {
         let projectPath = settings.watchedProjectPath
 
         Task.detached {
+            // Use login shell to inherit user's PATH (so `claude` CLI is findable)
             let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-            process.arguments = ["claude", "-p", "Run /drift-check on this project"]
-            process.currentDirectoryURL = URL(fileURLWithPath: projectPath)
+            process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+            process.arguments = ["-l", "-c", "cd \"\(projectPath)\" && claude -p \"Run /drift-check on this project\""]
 
             let pipe = Pipe()
             process.standardOutput = pipe

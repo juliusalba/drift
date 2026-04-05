@@ -108,9 +108,9 @@ struct SettingsView: View {
 
             // Connection Status
             Section {
-                connectionRow("Unsplash", connected: KeychainService.hasKey(.unsplashAccessKey))
-                connectionRow("Pexels", connected: KeychainService.hasKey(.pexelsApiKey))
-                connectionRow("Figma", connected: KeychainService.hasKey(.figmaPersonalToken))
+                connectionRow("Unsplash", connected: !unsplashKey.isEmpty)
+                connectionRow("Pexels", connected: !pexelsKey.isEmpty)
+                connectionRow("Figma", connected: !figmaToken.isEmpty)
                 connectionRow("Refero MCP", connected: true, note: "Via Claude Code")
                 connectionRow("21st.dev MCP", connected: true, note: "Via Claude Code")
             } header: {
@@ -284,7 +284,7 @@ struct SettingsView: View {
         panel.message = "Select your iOS project folder"
         panel.prompt = "Select"
         if panel.runModal() == .OK, let url = panel.url {
-            service.settings.watchedProjectPath = url.path
+            service.setProjectPath(url.path)
         }
     }
 

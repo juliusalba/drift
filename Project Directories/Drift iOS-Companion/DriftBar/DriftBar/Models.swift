@@ -59,8 +59,8 @@ struct DriftScreen: Codable, Identifiable {
     let score: Double
     let filePath: String
     let discrepancies: [Discrepancy]
-    let screenshotPath: String?
-    let designPath: String?
+    var screenshotPath: String? = nil
+    var designPath: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case name
@@ -79,7 +79,7 @@ struct Discrepancy: Codable, Identifiable {
     let element: String
     let expected: String
     let actual: String
-    let fixHint: String?
+    var fixHint: String? = nil
     let status: FixStatus
     let confidence: Double
 
@@ -113,7 +113,7 @@ struct Iteration: Codable, Identifiable {
     let delta: Double
     let fixed: Int
     let regressions: Int
-    let timestamp: String?
+    var timestamp: String? = nil
 }
 
 struct RunIndexEntry: Codable, Identifiable {
