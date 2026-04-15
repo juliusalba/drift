@@ -360,31 +360,85 @@ final class DriftService: ObservableObject {
 
     func runDriftCheck() {
         guard !isRunning else { return }
-        guard !settings.watchedProjectPath.isEmpty else { return }
+        guard !settings.watchedProjectPath.isEmpty else {
+            lastError = "No project selected. Open Settings first."
+            return
+        }
 
-        // Try to open Claude Code in the project directory instead of running headlessly.
-        // The --print flag has compatibility issues, so we open Claude Code interactively.
         let projectPath = settings.watchedProjectPath
 
-        // Copy the command to clipboard for easy pasting
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString("/drift-check", forType: .string)
+        // Write a .command script to a stable location and `open` it — Terminal executes .command
+        // files natively without the AppleScript Automation permission dance.
+        let scriptURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("drift-run-\(UUID().uuidString.prefix(6)).command")
+        let script = """
+        #!/bin/zsh
+        cd "\(projectPath)" || exit 1
+        clear
 
-        // Try opening Claude Code (the desktop app) with the project
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        process.arguments = ["-l", "-c", "cd \"\(projectPath)\" && open -a 'Claude' . 2>/dev/null || claude 2>/dev/null &"]
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
+        # Find a Node runtime that doesn't crash claude-code.
+        # Homebrew's v25 ships with a bundling bug that breaks the CLI — prefer v24/v22.
+        find_node() {
+          for cand in \\
+            "/usr/local/bin/node" \\
+            "$HOME/.nvm/versions/node/v22.20.0/bin/node" \\
+            "$HOME/.nvm/versions/node/v20.18.0/bin/node" \\
+            "/opt/homebrew/bin/node"; do
+            if [ -x "$cand" ]; then
+              v=$("$cand" --version 2>/dev/null | sed 's/^v//;s/\\..*//')
+              if [ -n "$v" ] && [ "$v" -lt 25 ]; then
+                echo "$cand"; return 0
+              fi
+            fi
+          done
+          return 1
+        }
 
+        NODE_BIN=$(find_node)
+        CLAUDE_JS="/usr/local/bin/claude"
+        if [ -z "$NODE_BIN" ]; then
+          echo "⚠️  No compatible Node.js found (need <v25). Install Node 22 LTS:"
+          echo "    brew install node@22   OR   nvm install 22"
+          echo "Press any key to close…"
+          read -k1; exit 1
+        fi
+        if [ ! -x "$CLAUDE_JS" ]; then
+          # Fall back to PATH lookup if the canonical install moved
+          CLAUDE_JS=$(command -v claude 2>/dev/null)
+        fi
+        if [ -z "$CLAUDE_JS" ]; then
+          echo "⚠️  claude CLI not found. Install from https://claude.com/code"
+          echo "Press any key to close…"
+          read -k1; exit 1
+        fi
+
+        echo "→ node: $NODE_BIN ($($NODE_BIN --version))"
+        echo "→ claude: $CLAUDE_JS"
+        echo ""
+        exec "$NODE_BIN" "$CLAUDE_JS" "/drift-check"
+        """
         do {
-            try process.run()
-            currentPhase = "/drift-check copied to clipboard"
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+            try script.write(to: scriptURL, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
+        } catch {
+            lastError = "Couldn't write run script: \(error.localizedDescription)"
+            return
+        }
+
+        // `open` with Terminal.app as the handler. Doesn't require automation permission.
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        proc.arguments = ["-a", "Terminal", scriptURL.path]
+        proc.standardOutput = FileHandle.nullDevice
+        proc.standardError = Pipe()
+        do {
+            try proc.run()
+            currentPhase = "Claude Code starting with /drift-check…"
+            DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
                 self?.currentPhase = nil
             }
         } catch {
-            lastError = "Open Claude Code and run /drift-check in your project"
+            lastError = "Couldn't launch Terminal: \(error.localizedDescription)"
         }
     }
 }
