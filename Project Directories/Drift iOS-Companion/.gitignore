@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+.next/
+out/
+
+# Build
+DerivedData/
+*.xcuserdata
+.build/
+
+# Environment
+.env
+.env.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Drift reports (generated data)
+drift.plugin/drift-reports/
+drift-reports/
+.drift-cache/
+DriftBar.xcodeproj.backup-*
+*.xcodeproj.backup-*

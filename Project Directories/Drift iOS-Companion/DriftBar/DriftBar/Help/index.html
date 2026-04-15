@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>How to use Drift</title>
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<div class="app">
+  <aside class="toc">
+    <div class="brand">
+      <div class="logo"></div>
+      <div>
+        <div class="brand-title">Drift</div>
+        <div class="brand-sub">Design QA for iOS</div>
+      </div>
+    </div>
+    <nav>
+      <a href="#quick-start" class="active">Quick start</a>
+      <a href="#how-it-works">How it works</a>
+      <a href="#walkthrough-link">Linking a project</a>
+      <a href="#walkthrough-run">Running a drift check</a>
+      <a href="#walkthrough-read">Reading the report</a>
+      <a href="#concepts">Concepts</a>
+      <a href="#faq">FAQ</a>
+    </nav>
+    <div class="footer-note">v1 · bundled offline</div>
+  </aside>
+
+  <main>
+    <section id="quick-start">
+      <h1>Quick start</h1>
+      <p class="lede">Drift watches your Xcode builds, snapshots the screens, and tells you where they've drifted from your Figma design — without you having to eyeball a simulator.</p>
+
+      <ol class="steps">
+        <li>
+          <div class="step-num">1</div>
+          <div class="step-body">
+            <h3>Link a project</h3>
+            <p>Click the menu bar icon → <span class="kbd">⚙</span> Settings → <em>Add project</em>. Point it at your <code>.xcodeproj</code> and your Figma file.</p>
+            <figure><img src="shots/01-settings.png" alt="Settings window showing project linking" onerror="this.parentNode.classList.add('empty')"/><figcaption>Settings · Add project</figcaption></figure>
+          </div>
+        </li>
+        <li>
+          <div class="step-num">2</div>
+          <div class="step-body">
+            <h3>Run a check</h3>
+            <p>Press <span class="kbd">⌘R</span> from the menu or click <em>Run</em>. Drift builds, launches the sim, walks the flow, and captures screens.</p>
+            <figure><img src="shots/02-menu.png" alt="Menu bar popover with Run button" onerror="this.parentNode.classList.add('empty')"/><figcaption>Menu · Run drift check</figcaption></figure>
+          </div>
+        </li>
+        <li>
+          <div class="step-num">3</div>
+          <div class="step-body">
+            <h3>Read the drift</h3>
+            <p>Score is green / yellow / red at a glance. Click any screen to see the pixel diff against the Figma reference.</p>
+            <figure><img src="shots/03-comparison.png" alt="Comparison view with diff overlay" onerror="this.parentNode.classList.add('empty')"/><figcaption>Comparison · pixel diff</figcaption></figure>
+          </div>
+        </li>
+      </ol>
+    </section>
+
+    <section id="how-it-works">
+      <h1>How it works</h1>
+      <p>Drift is a loop. Every build triggers a capture; every capture triggers a diff.</p>
+      <div class="mermaid">
+flowchart LR
+  A[Xcode build] -->|BuildWatcher| B(Simulator launch)
+  B --> C[Walk flow via XCUITest]
+  C --> D[Capture screens]
+  D --> E{Compare to Figma}
+  E -->|match ≥ 95%| F[Pass · green]
+  E -->|85–95%| G[Warn · yellow]
+  E -->|&lt; 85%| H[Fail · red]
+  F & G & H --> I[Menu bar status]
+      </div>
+      <p class="note">The whole loop runs headlessly — you don't need to touch the simulator unless something's wrong.</p>
+    </section>
+
+    <section id="walkthrough-link">
+      <h1>Linking a project</h1>
+      <p>Drift needs two things: the <strong>Xcode project</strong> it should build, and a <strong>Figma file</strong> (or a folder of reference PNGs) to diff against.</p>
+      <h3>Using Figma</h3>
+      <ol>
+        <li>Generate a Figma personal access token at <code>figma.com/settings</code> → Personal access tokens.</li>
+        <li>Paste it in <em>Settings → Figma → Token</em>. Drift stores it in the macOS Keychain.</li>
+        <li>Drop your Figma file URL. Drift pulls frame thumbnails at device resolution.</li>
+      </ol>
+      <h3>Using static reference images</h3>
+      <p>Drop a folder of PNGs named <code>{screen-name}.png</code>. Drift matches filenames to XCUITest screen captures.</p>
+      <figure><img src="shots/04-link-project.png" alt="" onerror="this.parentNode.classList.add('empty')"/><figcaption>Linking a Figma file</figcaption></figure>
+    </section>
+
+    <section id="walkthrough-run">
+      <h1>Running a drift check</h1>
+      <p>Three ways to trigger:</p>
+      <ul class="clean">
+        <li><strong>Automatic</strong> — any successful Xcode build fires a check</li>
+        <li><strong>Manual</strong> — <span class="kbd">⌘R</span> or the <em>Run</em> button in the menu</li>
+        <li><strong>CLI</strong> — <code>drift-check --project ~/MyApp</code></li>
+      </ul>
+      <p>Checks run in ~20–60 seconds depending on flow length. You'll see progress in the menu popover; the bar icon glows yellow while running.</p>
+      <figure><img src="shots/05-running.png" alt="" onerror="this.parentNode.classList.add('empty')"/><figcaption>A check in flight</figcaption></figure>
+    </section>
+
+    <section id="walkthrough-read">
+      <h1>Reading the report</h1>
+      <p>Each run produces a per-screen match percentage. The overall score is the weighted average across screens, heavier on the ones you've marked as critical.</p>
+      <div class="score-row">
+        <div class="score pass">≥ 95% · Pass</div>
+        <div class="score warn">85–95% · Warn</div>
+        <div class="score fail">&lt; 85% · Fail</div>
+      </div>
+      <h3>Diff overlay</h3>
+      <p>Red regions are pixel differences. Hover for likely cause — color off, text shifted, missing element. Drift ignores anti-aliasing and status-bar content by default.</p>
+      <figure><img src="shots/06-diff.png" alt="" onerror="this.parentNode.classList.add('empty')"/><figcaption>Diff overlay on the welcome screen</figcaption></figure>
+    </section>
+
+    <section id="concepts">
+      <h1>Concepts</h1>
+      <dl class="concepts">
+        <dt>Baseline</dt>
+        <dd>The Figma frame (or static PNG) that the app should match. Updating your Figma updates your baseline.</dd>
+        <dt>Drift</dt>
+        <dd>Divergence between what shipped and what was designed. Expressed as a % of pixels that differ beyond a fuzz threshold.</dd>
+        <dt>Threshold</dt>
+        <dd>How tolerant the diff is. Default 2% — lower for launch screens, higher for data-heavy views.</dd>
+        <dt>Critical screen</dt>
+        <dd>A screen weighted more heavily in the overall score. Mark onboarding, paywall, and empty states as critical.</dd>
+        <dt>Flow</dt>
+        <dd>An XCUITest script that walks the app to the screens you want compared. Drift ships with a starter flow; you extend it per project.</dd>
+      </dl>
+    </section>
+
+    <section id="faq">
+      <h1>FAQ</h1>
+      <details><summary>Why isn't my build triggering a check?</summary>
+        <p>BuildWatcher tails Xcode's <code>DerivedData</code>. Make sure the project's DerivedData location is default, not custom. Custom paths require setting <code>DRIFT_DERIVED_DATA</code> in Settings.</p>
+      </details>
+      <details><summary>My Figma token stopped working.</summary>
+        <p>Figma tokens expire after 90 days of inactivity. Regenerate one and paste it into Settings — Drift replaces the keychain entry.</p>
+      </details>
+      <details><summary>Can I exclude dynamic content (timestamps, user data)?</summary>
+        <p>Yes — add a mask region in your Figma frame by naming a rectangle <code>drift-ignore</code>. Drift skips that region during diff.</p>
+      </details>
+      <details><summary>Where are captures stored?</summary>
+        <p><code>~/Library/Application Support/DriftBar/runs/{timestamp}/</code>. Open via Settings → <em>Reveal runs folder</em>.</p>
+      </details>
+    </section>
+  </main>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<script>
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'dark',
+    themeVariables: {
+      fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif',
+      primaryColor: '#1f2937',
+      primaryTextColor: '#e5e7eb',
+      primaryBorderColor: '#374151',
+      lineColor: '#6b7280',
+      secondaryColor: '#111827'
+    }
+  });
+
+  // Scroll-spy for TOC
+  const links = document.querySelectorAll('.toc nav a');
+  const sections = [...links].map(a => document.querySelector(a.getAttribute('href')));
+  const io = new IntersectionObserver((entries) => {
+    entries.forEach(e => {
+      if (e.isIntersecting) {
+        links.forEach(l => l.classList.remove('active'));
+        const link = document.querySelector(`.toc nav a[href="#${e.target.id}"]`);
+        if (link) link.classList.add('active');
+      }
+    });
+  }, { rootMargin: '-20% 0px -70% 0px' });
+  sections.forEach(s => s && io.observe(s));
+</script>
+</body>
+</html>

@@ -39,7 +39,13 @@ final class DriftService: ObservableObject {
         buildWatcher = BuildWatcher(
             onBuildCompleted: { [weak self] in
                 Task { @MainActor in
-                    guard let self, self.settings.autoRunOnBuild else { return }
+                    guard let self else { return }
+                    // Auto-run design audit on every successful build — unless the fixer is
+                    // mid-run (which rebuilds the target and would re-fire the audit in a loop).
+                    if !AuditFixer.isActive {
+                        AuditStore.shared.autoScanIfConfigured(path: self.settings.watchedProjectPath)
+                    }
+                    guard self.settings.autoRunOnBuild else { return }
                     self.runDriftCheck()
                 }
             },

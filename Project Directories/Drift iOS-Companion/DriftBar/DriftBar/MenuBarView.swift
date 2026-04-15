@@ -698,6 +698,12 @@ struct MenuBarView: View {
 
             Divider().frame(height: 12)
 
+            AuditMenuButton(service: service)
+
+            ActionButton(icon: "questionmark.circle", label: nil, help: "How to use Drift") {
+                HelpWindowManager.shared.open()
+            }
+
             ActionButton(icon: "gear", label: nil, help: "Settings (Cmd+,)") {
                 SettingsWindowManager.shared.open(service: service)
             }
