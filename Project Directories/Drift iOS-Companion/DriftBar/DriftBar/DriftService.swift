@@ -412,10 +412,45 @@ final class DriftService: ObservableObject {
           read -k1; exit 1
         fi
 
-        echo "→ node: $NODE_BIN ($($NODE_BIN --version))"
-        echo "→ claude: $CLAUDE_JS"
+        # Nice header shown in Terminal before Claude Code takes over.
+        printf '\\033[1;38;5;105m'
+        cat <<'BANNER'
+
+        ╭──────────────────────────────────────────────────────────────╮
+        │                                                              │
+        │   ██████╗ ██████╗ ██╗███████╗████████╗                       │
+        │   ██╔══██╗██╔══██╗██║██╔════╝╚══██╔══╝                       │
+        │   ██║  ██║██████╔╝██║█████╗     ██║                          │
+        │   ██║  ██║██╔══██╗██║██╔══╝     ██║                          │
+        │   ██████╔╝██║  ██║██║██║        ██║                          │
+        │   ╚═════╝ ╚═╝  ╚═╝╚═╝╚═╝        ╚═╝                          │
+        │                                                              │
+        │   Design QA supervisor session                               │
+        │                                                              │
+        ╰──────────────────────────────────────────────────────────────╯
+
+        BANNER
+        printf '\\033[0m'
+
         echo ""
-        exec "$NODE_BIN" "$CLAUDE_JS" "/drift-check"
+        echo "  Model:       Claude Opus 4.6"
+        echo "  Permissions: dangerously-skip  (edits + shell without prompts)"
+        echo "  Project:     \(projectPath)"
+        echo "  Runtime:     $NODE_BIN ($($NODE_BIN --version))"
+        echo ""
+        echo "  Starting with /drift-check — runs the full audit + fix loop."
+        echo "  Other useful commands once the session is live:"
+        echo "    /drift-audit    scan only (no edits)"
+        echo "    /drift-fix      fix violations using Theme tokens"
+        echo "    /drift-report   open the latest HTML report"
+        echo ""
+        echo "  ──────────────────────────────────────────────────────────"
+        echo ""
+
+        exec "$NODE_BIN" "$CLAUDE_JS" \\
+          --model opus \\
+          --dangerously-skip-permissions \\
+          "/drift-check"
         """
         do {
             try script.write(to: scriptURL, atomically: true, encoding: .utf8)
