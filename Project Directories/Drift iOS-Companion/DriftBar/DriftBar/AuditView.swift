@@ -38,31 +38,42 @@ struct AuditView: View {
     @ObservedObject var store = AuditStore.shared
     @StateObject private var fixer = AuditFixer()
     @StateObject private var xsync = XcodeSync()
+    @StateObject private var chat = ChatStore()
     @State private var missingCount: Int = 0
     @State private var needsThemeInit: Bool = false
+    @State private var showChat: Bool = false
     @State private var selectedKind: Violation.Kind? = nil
     @State private var expandedFiles: Set<String> = []
     @State private var showFixConfirm = false
     @State private var fixerErrorMessage: String?
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            Divider()
-            if store.isScanning {
-                scanning
-            } else if let report = store.report {
-                body(for: report)
-            } else {
-                empty
-            }
-            if let stats = fixer.lastRunStats, !fixer.isRunning {
+        HStack(spacing: 0) {
+            VStack(spacing: 0) {
+                header
                 Divider()
-                resultBanner(stats)
+                if store.isScanning {
+                    scanning
+                } else if let report = store.report {
+                    body(for: report)
+                } else {
+                    empty
+                }
+                if let stats = fixer.lastRunStats, !fixer.isRunning {
+                    Divider()
+                    resultBanner(stats)
+                }
+                if fixer.isRunning || !fixer.log.isEmpty {
+                    Divider()
+                    fixerPane
+                }
             }
-            if fixer.isRunning || !fixer.log.isEmpty {
+            .frame(minWidth: 560)
+            if showChat {
                 Divider()
-                fixerPane
+                ChatPane(chat: chat, store: store, fixer: fixer)
+                    .frame(width: 380)
+                    .transition(.move(edge: .trailing))
             }
         }
         .frame(minWidth: 760, minHeight: 560)
@@ -147,11 +158,18 @@ struct AuditView: View {
             }
             .buttonStyle(.borderedProminent)
             .disabled(fixer.isRunning || store.isScanning)
+            .help("Hand all \(r.count) violations to Claude Opus 4.6 — it will edit files in place to use Theme tokens, then DriftBar rescans and produces an HTML report")
         }
         Button(action: rescan) { Image(systemName: "arrow.clockwise") }
-            .help("Rescan")
+            .help("Rescan the project for design-system violations")
             .buttonStyle(.borderless)
             .disabled(store.isScanning || store.scanDirectory == nil)
+        Button(action: { withAnimation(.easeInOut(duration: 0.2)) { showChat.toggle() } }) {
+            Image(systemName: showChat ? "bubble.left.and.bubble.right.fill" : "bubble.left.and.bubble.right")
+        }
+        .help(showChat ? "Hide the chat panel" : "Ask Drift about this audit — opens a chat panel")
+        .buttonStyle(.borderless)
+        .foregroundStyle(showChat ? Theme.Colors.accent : Theme.Colors.text)
     }
 
     private func body(for report: AuditEngine.Report) -> some View {
@@ -490,11 +508,12 @@ extension AuditView {
                     }
                 }
                 .buttonStyle(.borderedProminent)
+                .help("Open the HTML report in your browser — includes A/B screenshots (if configured), per-file diffs, and a violation-by-violation status list")
                 Button(action: { NSWorkspace.shared.activateFileViewerSelecting([url]) }) {
                     Image(systemName: "folder")
                 }
                 .buttonStyle(.borderless)
-                .help("Reveal in Finder")
+                .help("Reveal the report folder in Finder")
             }
         }
         .padding(.horizontal, Theme.Spacing.s5)
