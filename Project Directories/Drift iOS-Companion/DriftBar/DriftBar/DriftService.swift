@@ -14,6 +14,7 @@ final class DriftService: ObservableObject {
     private let settingsURL: URL
     private var reportsDir: URL?
     private var buildWatcher: BuildWatcher?
+    private var sessionObservers: Set<AnyCancellable> = []
 
     init() {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
@@ -29,6 +30,20 @@ final class DriftService: ObservableObject {
                 .appendingPathComponent("drift-reports", isDirectory: true)
             loadReports()
         }
+
+        // Mirror the shared session's live state into our @Published surface
+        // so the MenuBarView header spinner ("Analyzing…") actually tracks
+        // reality. DriftSessionWindowManager owns the session; we just watch.
+        let session = DriftSessionWindowManager.shared.session
+        session.$status
+            .map { $0 == .running }
+            .receive(on: RunLoop.main)
+            .assign(to: \.isRunning, on: self)
+            .store(in: &sessionObservers)
+        session.$currentPhase
+            .receive(on: RunLoop.main)
+            .assign(to: \.currentPhase, on: self)
+            .store(in: &sessionObservers)
     }
 
     // MARK: - Watching
@@ -88,6 +103,14 @@ final class DriftService: ObservableObject {
         panel.message = "Select your iOS project folder"
         panel.prompt = "Select"
         panel.level = .floating
+        // Start in the user's home (not Desktop) so macOS doesn't prompt for Desktop TCC.
+        // If they already picked a project once, re-open at its parent.
+        if !settings.watchedProjectPath.isEmpty {
+            let parent = URL(fileURLWithPath: settings.watchedProjectPath).deletingLastPathComponent()
+            panel.directoryURL = parent
+        } else {
+            panel.directoryURL = URL(fileURLWithPath: NSHomeDirectory())
+        }
 
         panel.begin { [weak self] response in
             guard response == .OK, let url = panel.url else { return }
@@ -358,7 +381,43 @@ final class DriftService: ObservableObject {
 
     // MARK: - Run Drift Check
 
+    /// Primary Run path: opens the full-screen Drift Session window and streams
+    /// `claude -p /drift-check` output live. Self-heals prereqs — auto-initializes
+    /// the design system if Theme.swift / drift.theme.json are missing, so the
+    /// slash command never has to bail out with "please click that button first".
     func runDriftCheck() {
+        guard !settings.watchedProjectPath.isEmpty else {
+            lastError = "No project selected. Open Settings first."
+            return
+        }
+        let projectURL = URL(fileURLWithPath: settings.watchedProjectPath)
+
+        // Open the session window first so the user sees an immediate response to
+        // their click. The design-system auto-init enumerates the project tree
+        // (can take >100ms on large repos) — push it onto a detached task so the
+        // menu bar popover doesn't stall. `/drift-check` also self-heals if the
+        // theme files are missing, so this init is a fast-path, not a hard barrier.
+        DriftSessionWindowManager.shared.start(
+            slashCommand: "/drift-check",
+            projectDirectory: projectURL
+        )
+
+        Task.detached { [weak self] in
+            let needsInit = !DesignSystemInitializer.isInitialized(in: projectURL)
+            guard needsInit else { return }
+            do {
+                _ = try DesignSystemInitializer.initialize(in: projectURL)
+            } catch {
+                await MainActor.run { [weak self] in
+                    self?.lastError = "Auto-init warning: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    /// Legacy escape hatch: opens Claude Code in Terminal for an interactive session.
+    /// Kept for power users who want TUI + ^C; surfaced via a secondary menu item.
+    func runDriftCheckInTerminal() {
         guard !isRunning else { return }
         guard !settings.watchedProjectPath.isEmpty else {
             lastError = "No project selected. Open Settings first."
@@ -433,7 +492,8 @@ final class DriftService: ObservableObject {
         printf '\\033[0m'
 
         echo ""
-        echo "  Model:       Claude Opus 4.6"
+        echo "  Model:       Claude Opus 4.7"
+        echo "  Auth:        Claude subscription (OAuth)"
         echo "  Permissions: dangerously-skip  (edits + shell without prompts)"
         echo "  Project:     \(projectPath)"
         echo "  Runtime:     $NODE_BIN ($($NODE_BIN --version))"
@@ -447,8 +507,12 @@ final class DriftService: ObservableObject {
         echo "  ──────────────────────────────────────────────────────────"
         echo ""
 
+        # Force OAuth (Claude subscription) login — never API billing.
+        unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL
+        unset CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_VERTEX
+
         exec "$NODE_BIN" "$CLAUDE_JS" \\
-          --model opus \\
+          --model claude-opus-4-7 \\
           --dangerously-skip-permissions \\
           "/drift-check"
         """
