@@ -136,10 +136,14 @@ enum TesterReport {
     }
 
     private static func escape(_ s: String) -> String {
+        // `'` is escaped because some attributes in this template use single
+        // quotes (`<img src='...'>`). If a step label ever contained a stray
+        // apostrophe it would break attribute parsing otherwise.
         s.replacingOccurrences(of: "&", with: "&amp;")
          .replacingOccurrences(of: "<", with: "&lt;")
          .replacingOccurrences(of: ">", with: "&gt;")
          .replacingOccurrences(of: "\"", with: "&quot;")
+         .replacingOccurrences(of: "'", with: "&#39;")
     }
 
     // MARK: - Summary model

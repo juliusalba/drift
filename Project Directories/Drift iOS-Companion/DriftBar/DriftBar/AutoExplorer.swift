@@ -514,7 +514,9 @@ final class AutoExplorer: ObservableObject {
     }
 
     nonisolated private static func describeUI(idb: String, udid: String) async -> [UIElement]? {
-        let out = runIDB(idb: idb, args: ["--udid", udid, "ui", "describe-all", "--json"])
+        // `describe-all` has no `--json` flag in fb-idb — it always prints
+        // JSON to stdout. Passing one makes argparse reject the command.
+        let out = runIDB(idb: idb, args: ["--udid", udid, "ui", "describe-all"])
         guard !out.isEmpty else { return nil }
         guard let data = out.data(using: .utf8),
               let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
