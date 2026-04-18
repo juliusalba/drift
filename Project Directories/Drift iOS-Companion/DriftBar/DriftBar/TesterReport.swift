@@ -27,7 +27,7 @@ enum TesterReport {
         <body>
           <header>
             <h1>Drift Tester Report</h1>
-            <p class="ts">\(isoNow)</p>
+            <p class="ts">\(isoNow())</p>
             \(summaryCards(summary))
           </header>
           \(bugsSection(steps))
@@ -128,10 +128,12 @@ enum TesterReport {
 
     // MARK: - Helpers
 
-    private static let isoNow: String = {
-        let df = ISO8601DateFormatter()
-        return df.string(from: Date())
-    }()
+    /// Must be a func, not a `static let` — a static let is evaluated once
+    /// per process lifetime, which would stamp every report with the time of
+    /// the first run. Generating on each call is cheap.
+    private static func isoNow() -> String {
+        ISO8601DateFormatter().string(from: Date())
+    }
 
     private static func escape(_ s: String) -> String {
         s.replacingOccurrences(of: "&", with: "&amp;")

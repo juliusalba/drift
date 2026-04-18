@@ -88,6 +88,11 @@ final class AutoExplorer: ObservableObject {
     private var maxSteps: Int = 20
     private var tapDelayMs: UInt64 = 700
     private var deepCheck: Bool = false
+    /// Bumped on every `start()`. The detached task captures this at launch
+    /// and aborts quietly at every await hop if a newer run has superseded it —
+    /// protects against the user clicking Auto-walk → Stop → Auto-walk fast
+    /// enough that the old task is still alive when the new one begins.
+    private var runID: UInt64 = 0
 
     // MARK: - Lifecycle
 
@@ -101,6 +106,8 @@ final class AutoExplorer: ObservableObject {
         self.deepCheck = deepCheck
         self.steps = []
         self.reportURL = nil
+        self.runID &+= 1
+        let myRun = self.runID
 
         let stamp = Self.timestampString()
         let dir = projectDirectory
@@ -120,7 +127,8 @@ final class AutoExplorer: ObservableObject {
             // 1. Check idb is on PATH.
             guard let idb = Self.findIDB() else {
                 await MainActor.run { [weak self] in
-                    self?.state = .unavailable(reason: """
+                    guard let self, self.runID == myRun else { return }
+                    self.state = .unavailable(reason: """
                         idb CLI not found. Install with:
                           brew tap facebook/fb && brew install idb-companion
                           pipx install fb-idb
@@ -133,34 +141,50 @@ final class AutoExplorer: ObservableObject {
             for _ in 0..<30 {
                 if let found = Self.findBootedUDID() { udidOut = found; break }
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
-                let cancelled = await MainActor.run { [weak self] in self?.isCancelled ?? true }
+                let cancelled = await MainActor.run { [weak self] in
+                    guard let self, self.runID == myRun else { return true }
+                    return self.isCancelled
+                }
                 if cancelled { return }
             }
+            let stillCurrent1 = await MainActor.run { [weak self] in self?.runID == myRun }
+            guard stillCurrent1 else { return }
             guard let bootedUDID = udidOut else {
                 await MainActor.run { [weak self] in
-                    self?.state = .failed("No booted simulator appeared after 30s.")
+                    guard let self, self.runID == myRun else { return }
+                    self.state = .failed("No booted simulator appeared after 30s.")
                 }
                 return
             }
             await MainActor.run { [weak self] in
-                self?.udid = bootedUDID
-                self?.state = .exploring
+                guard let self, self.runID == myRun else { return }
+                self.udid = bootedUDID
+                self.state = .exploring
             }
 
             // 3. Run scripted flows first (if any), then free exploration.
             if !flows.isEmpty {
-                await self?.flowsLoop(idb: idb, udid: bootedUDID, dir: dir, flows: flows)
+                await self?.flowsLoop(idb: idb, udid: bootedUDID, dir: dir,
+                                      flows: flows, runID: myRun)
             }
-            let keepGoing = await MainActor.run { [weak self] in self?.isCancelled == false }
+            let keepGoing = await MainActor.run { [weak self] in
+                guard let self, self.runID == myRun else { return false }
+                return !self.isCancelled
+            }
             if keepGoing {
-                await self?.explorationLoop(idb: idb, udid: bootedUDID, dir: dir)
+                await self?.explorationLoop(idb: idb, udid: bootedUDID,
+                                            dir: dir, runID: myRun)
             }
 
             // Always write the final report, regardless of which loops ran.
+            // But only if we're still the current run — a superseded task
+            // shouldn't overwrite the new run's report file.
+            let stillCurrent2 = await MainActor.run { [weak self] in self?.runID == myRun }
+            guard stillCurrent2 else { return }
             let finalSteps = await MainActor.run { [weak self] in self?.steps ?? [] }
             TesterReport.write(dir: dir, steps: finalSteps)
             await MainActor.run { [weak self] in
-                guard let self else { return }
+                guard let self, self.runID == myRun else { return }
                 self.reportURL = dir.appendingPathComponent("report.html")
                 // Don't overwrite .failed — those carry a specific reason the
                 // UI is displaying. Any other state transitions to .finished.
@@ -179,17 +203,27 @@ final class AutoExplorer: ObservableObject {
 
     // MARK: - Loop
 
-    nonisolated private func explorationLoop(idb: String, udid: String, dir: URL) async {
-        var stepIndex = 0
+    nonisolated private func explorationLoop(idb: String, udid: String, dir: URL, runID: UInt64) async {
+        // Continue numbering where flows (if any) left off, so screenshot
+        // filenames don't collide and Step.index is monotonic across the run.
+        let startIndex = await MainActor.run { [weak self] in self?.steps.count ?? 0 }
+        var stepIndex = startIndex
         var alreadyTapped: Set<String> = []
         // "after" of step N is "before" of step N+1 — cache so we save a
         // ~300ms screenshot call per iteration.
         var cachedBefore: URL?
 
         while true {
-            let cancelled = await MainActor.run { [weak self] in self?.isCancelled ?? true }
-            if cancelled { break }
-            if await self.shouldStop(at: stepIndex) { break }
+            let (cancelled, stale) = await MainActor.run { [weak self] in
+                guard let self, self.runID == runID else { return (true, true) }
+                return (self.isCancelled, false)
+            }
+            if stale || cancelled { break }
+            // Stop once the *exploration-only* step count hits maxSteps —
+            // not stepIndex, which may already include flow steps.
+            if (stepIndex - startIndex) >= (await MainActor.run { [weak self] in self?.maxSteps ?? 0 }) {
+                break
+            }
 
             // 1. Capture the current state as this step's "before" frame.
             let before: URL?
@@ -322,13 +356,16 @@ final class AutoExplorer: ObservableObject {
         return nil
     }
 
-    nonisolated private func flowsLoop(idb: String, udid: String, dir: URL, flows: [Flow]) async {
+    nonisolated private func flowsLoop(idb: String, udid: String, dir: URL, flows: [Flow], runID: UInt64) async {
         var stepIndex = await MainActor.run { [weak self] in self?.steps.count ?? 0 }
         var cachedBefore: URL?
 
         for flow in flows {
-            let cancelled = await MainActor.run { [weak self] in self?.isCancelled ?? true }
-            if cancelled { return }
+            let (cancelled, stale) = await MainActor.run { [weak self] in
+                guard let self, self.runID == runID else { return (true, true) }
+                return (self.isCancelled, false)
+            }
+            if stale || cancelled { return }
 
             // Record a marker step for the flow boundary so the report reads
             // as a narrative ("=== Sign in ===") rather than a flat list.
@@ -345,8 +382,11 @@ final class AutoExplorer: ObservableObject {
             stepIndex += 1
 
             for flowStep in flow.steps {
-                let cancelled = await MainActor.run { [weak self] in self?.isCancelled ?? true }
-                if cancelled { return }
+                let (cancelled, stale) = await MainActor.run { [weak self] in
+                    guard let self, self.runID == runID else { return (true, true) }
+                    return (self.isCancelled, false)
+                }
+                if stale || cancelled { return }
 
                 let before: URL?
                 if let cached = cachedBefore {
@@ -377,6 +417,16 @@ final class AutoExplorer: ObservableObject {
                     verdict = .unknown
                 }
 
+                // Deep check the "after" frame the same way exploration does,
+                // so turning on the toggle actually affects scripted flows too.
+                let bugs: [String]
+                let runDeep = await MainActor.run { [weak self] in self?.deepCheck ?? false }
+                if runDeep, let frame = after, verdict != .error {
+                    bugs = await Self.analyzeScreen(at: frame)
+                } else {
+                    bugs = []
+                }
+
                 await self.appendStep(Step(
                     index: stepIndex,
                     at: Date(),
@@ -385,7 +435,7 @@ final class AutoExplorer: ObservableObject {
                     beforeScreenshot: before,
                     afterScreenshot: after,
                     verdict: verdict,
-                    bugs: []
+                    bugs: bugs
                 ))
 
                 cachedBefore = after
@@ -443,18 +493,9 @@ final class AutoExplorer: ObservableObject {
 
     // MARK: - State hop helpers (to make the @MainActor cross clean)
 
-    private var isCancelledNow: Bool { isCancelled }
-
     nonisolated private func appendStep(_ step: Step) async {
         await MainActor.run { [weak self] in
             self?.steps.append(step)
-        }
-    }
-
-    nonisolated private func shouldStop(at stepIndex: Int) async -> Bool {
-        await MainActor.run { [weak self] in
-            guard let self else { return true }
-            return stepIndex >= self.maxSteps
         }
     }
 
@@ -585,13 +626,12 @@ final class AutoExplorer: ObservableObject {
         proc.standardError = Pipe()
         do { try proc.run() } catch { return "" }
 
-        // Hard timeout so a wedged claude call can't pause the whole tester.
-        let deadline = Date().addingTimeInterval(timeout)
-        DispatchQueue.global().async {
-            while proc.isRunning && Date() < deadline {
-                Thread.sleep(forTimeInterval: 0.2)
-            }
-            if proc.isRunning { proc.terminate() }
+        // Hard timeout — a wedged claude call can't be allowed to pause the
+        // whole tester. GCD's asyncAfter(deadline:) fires exactly once and
+        // doesn't hold a thread between now and then (unlike a sleep-poll).
+        DispatchQueue.global().asyncAfter(deadline: .now() + timeout) { [weak proc] in
+            guard let proc, proc.isRunning else { return }
+            proc.terminate()
         }
 
         let data = out.fileHandleForReading.readDataToEndOfFile()
