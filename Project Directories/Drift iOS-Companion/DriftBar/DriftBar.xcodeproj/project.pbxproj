@@ -24,6 +24,7 @@
 		5E3D9F7A2C8B1E4F6A0D5C11 /* SessionRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A7F9E5C3B8D1A6E4F0C7B22 /* SessionRecorder.swift */; };
 		7C4B8E2F5A9D3B1E6F0C8D11 /* LiveGitWatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F1A9D5E7B3C2A8D6E0F4C22 /* LiveGitWatcher.swift */; };
 		8D5A3F7C9B2E4D1A6F0C5E11 /* AutoExplorer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E0A9F3D8C5B2A4D1F7E0C22 /* AutoExplorer.swift */; };
+		9F6E2B8D4A1C5E3F7B0D9A11 /* TesterReport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B8A4D6F2E9C7B5A3F0E8C22 /* TesterReport.swift */; };
 		85BEF787CF916447C6DB0ACA /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0EA04F1A12F04E938E723B4F /* SettingsView.swift */; };
 		8BE553EE1C8B87589AD0E738 /* XcodeSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17B13B60F961C2D293D71D03 /* XcodeSync.swift */; };
 		9A7F79B5C38DBDDB98BC5EB2 /* DesignSystemInitializer.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC2CAB4F2BD3B2FDBED44903 /* DesignSystemInitializer.swift */; };
@@ -51,6 +52,7 @@
 		2A7F9E5C3B8D1A6E4F0C7B22 /* SessionRecorder.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SessionRecorder.swift; path = SessionRecorder.swift; sourceTree = "<group>"; };
 		4F1A9D5E7B3C2A8D6E0F4C22 /* LiveGitWatcher.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = LiveGitWatcher.swift; path = LiveGitWatcher.swift; sourceTree = "<group>"; };
 		6E0A9F3D8C5B2A4D1F7E0C22 /* AutoExplorer.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AutoExplorer.swift; path = AutoExplorer.swift; sourceTree = "<group>"; };
+		1B8A4D6F2E9C7B5A3F0E8C22 /* TesterReport.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TesterReport.swift; path = TesterReport.swift; sourceTree = "<group>"; };
 		3B32E2C476A70F8BBDAD6E99 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		40B447F76C2949D5C73F0F09 /* ChatStore.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ChatStore.swift; path = ChatStore.swift; sourceTree = "<group>"; };
 		4E669781131F9E8FD5C6C46B /* DriftBar.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = DriftBar.entitlements; sourceTree = "<group>"; };
@@ -127,6 +129,7 @@
 				2A7F9E5C3B8D1A6E4F0C7B22 /* SessionRecorder.swift */,
 				4F1A9D5E7B3C2A8D6E0F4C22 /* LiveGitWatcher.swift */,
 				6E0A9F3D8C5B2A4D1F7E0C22 /* AutoExplorer.swift */,
+				1B8A4D6F2E9C7B5A3F0E8C22 /* TesterReport.swift */,
 			);
 			path = DriftBar;
 			sourceTree = "<group>";
@@ -229,6 +232,7 @@
 				5E3D9F7A2C8B1E4F6A0D5C11 /* SessionRecorder.swift in Sources */,
 				7C4B8E2F5A9D3B1E6F0C8D11 /* LiveGitWatcher.swift in Sources */,
 				8D5A3F7C9B2E4D1A6F0C5E11 /* AutoExplorer.swift in Sources */,
+				9F6E2B8D4A1C5E3F7B0D9A11 /* TesterReport.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

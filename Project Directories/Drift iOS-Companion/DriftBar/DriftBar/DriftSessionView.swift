@@ -17,6 +17,7 @@ struct DriftSessionView: View {
     @State private var pulse = false
     @State private var expandedDiffPath: String?
     @State private var expandedDiffText: String = ""
+    @State private var deepCheck: Bool = false
     private let timer = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
 
     init(session: DriftSession, projectDirectory: URL?) {
@@ -244,13 +245,13 @@ struct DriftSessionView: View {
 
     private func startExplorer() {
         guard let dir = projectDirectory else { return }
-        explorer.start(projectDirectory: dir, maxSteps: 20)
+        explorer.start(projectDirectory: dir, maxSteps: 20, deepCheck: deepCheck)
     }
 
     private var explorerCard: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.s3) {
             HStack(spacing: Theme.Spacing.s2) {
-                Label("UI walk", systemImage: "figure.walk.motion")
+                Label("Tester", systemImage: "figure.walk.motion")
                     .font(Theme.Typography.md)
                     .foregroundStyle(Theme.Colors.text)
                 explorerStatePill
@@ -260,6 +261,13 @@ struct DriftSessionView: View {
                         .font(.system(size: 11, weight: .semibold, design: .rounded))
                         .foregroundStyle(Theme.Colors.textDim)
                 }
+            }
+
+            // Verdict summary is the headline answer: how many dead buttons
+            // did we find, how many bugs? Show it as soon as there's a step,
+            // so the user doesn't have to open the HTML report to see damage.
+            if !explorer.steps.isEmpty {
+                testerSummaryRow
             }
 
             switch explorer.state {
@@ -287,17 +295,85 @@ struct DriftSessionView: View {
                 }
             default:
                 if explorer.steps.isEmpty {
-                    Text("Click \"Auto-walk UI\" to have Drift tap every button it can reach. Each tap is captured as a screenshot.")
-                        .font(Theme.Typography.sm)
-                        .foregroundStyle(Theme.Colors.textDim)
+                    VStack(alignment: .leading, spacing: Theme.Spacing.s3) {
+                        Text("Drift will tap every reachable button and flag dead ones by comparing the screen before and after each tap.")
+                            .font(Theme.Typography.sm)
+                            .foregroundStyle(Theme.Colors.textDim)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Toggle(isOn: $deepCheck) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Deep check (vision)")
+                                    .font(Theme.Typography.sm)
+                                    .foregroundStyle(Theme.Colors.text)
+                                Text("Ask Claude to inspect each frame for layout bugs. ~3–5s per tap.")
+                                    .font(Theme.Typography.xs)
+                                    .foregroundStyle(Theme.Colors.textMuted)
+                            }
+                        }
+                        .toggleStyle(.switch)
+                    }
                 } else {
                     explorerStepsGrid
+                }
+            }
+
+            if let url = explorer.reportURL,
+               FileManager.default.fileExists(atPath: url.path) {
+                HStack {
+                    Spacer()
+                    Button {
+                        NSWorkspace.shared.open(url)
+                    } label: {
+                        Label("View report", systemImage: "doc.richtext")
+                    }
+                    .controlSize(.regular)
+                    .buttonStyle(.borderedProminent)
                 }
             }
         }
         .padding(Theme.Spacing.s5)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(cardBackground)
+    }
+
+    /// Counts per verdict — so the eyes land on "3 dead buttons" rather than
+    /// scrolling 20 tiles to spot the red borders.
+    private var testerSummaryRow: some View {
+        let s = explorer.steps
+        let responsive = s.filter { $0.verdict == .responsive }.count
+        let dead = s.filter { $0.verdict == .unresponsive }.count
+        let errors = s.filter { $0.verdict == .error }.count
+        let bugs = s.reduce(0) { $0 + $1.bugs.count }
+        return HStack(spacing: Theme.Spacing.s3) {
+            testerStat(label: "Responsive", value: responsive, tint: Theme.Colors.pass)
+            testerStat(label: "Dead buttons", value: dead, tint: Theme.Colors.fail)
+            testerStat(label: "Errors", value: errors, tint: Theme.Colors.warn)
+            testerStat(label: "Visual bugs", value: bugs, tint: Theme.Colors.warn)
+        }
+    }
+
+    private func testerStat(label: String, value: Int, tint: Color) -> some View {
+        HStack(spacing: 6) {
+            Text("\(value)")
+                .font(.system(size: 16, weight: .semibold, design: .rounded))
+                .foregroundStyle(value > 0 ? tint : Theme.Colors.textMuted)
+                .monospacedDigit()
+            Text(label)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(Theme.Colors.textDim)
+                .textCase(.uppercase)
+                .tracking(0.5)
+        }
+        .padding(.horizontal, Theme.Spacing.s3)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: Theme.Radius.sm)
+                .fill(Theme.Colors.bg.opacity(0.5))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.Radius.sm)
+                .strokeBorder(Theme.Colors.border.opacity(0.6), lineWidth: 1)
+        )
     }
 
     @ViewBuilder
@@ -960,14 +1036,28 @@ private struct ExplorerStepTile: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             thumbnail
-            Text("Step \(step.index + 1)")
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(Theme.Colors.text)
+            HStack(spacing: 4) {
+                Text("Step \(step.index + 1)")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Theme.Colors.text)
+                Spacer()
+                verdictPill
+            }
             Text(step.targetLabel ?? step.action)
                 .font(.system(size: 10, design: .monospaced))
                 .foregroundStyle(Theme.Colors.textDim)
                 .lineLimit(2)
                 .frame(maxWidth: 140, alignment: .leading)
+            if !step.bugs.isEmpty {
+                Text("\(step.bugs.count) bug\(step.bugs.count == 1 ? "" : "s")")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(Theme.Colors.warn)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(
+                        Capsule().fill(Theme.Colors.warn.opacity(0.15))
+                    )
+            }
         }
         .frame(width: 140)
     }
@@ -984,7 +1074,7 @@ private struct ExplorerStepTile: View {
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm))
                 .overlay(
                     RoundedRectangle(cornerRadius: Theme.Radius.sm)
-                        .strokeBorder(Theme.Colors.border, lineWidth: 1)
+                        .strokeBorder(verdictColor, lineWidth: 2)
                 )
         } else {
             RoundedRectangle(cornerRadius: Theme.Radius.sm)
@@ -995,6 +1085,35 @@ private struct ExplorerStepTile: View {
                         .foregroundStyle(Theme.Colors.textDim)
                 )
         }
+    }
+
+    private var verdictColor: Color {
+        switch step.verdict {
+        case .responsive:   return Theme.Colors.pass
+        case .unresponsive: return Theme.Colors.fail
+        case .error:        return Theme.Colors.warn
+        case .navigation:   return Theme.Colors.accent
+        case .unknown:      return Theme.Colors.border
+        }
+    }
+
+    private var verdictPill: some View {
+        let (label, color): (String, Color) = {
+            switch step.verdict {
+            case .responsive:   return ("OK", Theme.Colors.pass)
+            case .unresponsive: return ("DEAD", Theme.Colors.fail)
+            case .error:        return ("ERR", Theme.Colors.warn)
+            case .navigation:   return ("NAV", Theme.Colors.accent)
+            case .unknown:      return ("?",   Theme.Colors.textDim)
+            }
+        }()
+        return Text(label)
+            .font(.system(size: 8, weight: .bold))
+            .tracking(0.6)
+            .foregroundStyle(color)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 2)
+            .background(Capsule().fill(color.opacity(0.15)))
     }
 }
 

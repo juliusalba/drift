@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import CryptoKit
 
 /// Drives the booted iOS simulator by enumerating its accessibility tree via
 /// `idb describe-ui`, tapping the most distinct-looking elements with
@@ -26,34 +27,80 @@ final class AutoExplorer: ObservableObject {
         case failed(String)
     }
 
+    // MARK: - Flows (scripted user journeys)
+
+    /// Minimal schema for `drift.flows.json` at the project root. If the file
+    /// exists when the tester starts, each flow runs in order, step-by-step,
+    /// BEFORE any free exploration — giving deterministic coverage of the
+    /// paths the team actually cares about.
+    ///
+    /// ```json
+    /// [
+    ///   {"name": "Sign in", "steps": [
+    ///     {"tap": "Sign In"},
+    ///     {"type": {"target": "Email", "text": "me@example.com"}},
+    ///     {"tap": "Continue"}
+    ///   ]}
+    /// ]
+    /// ```
+    struct Flow {
+        let name: String
+        let steps: [FlowStep]
+    }
+
+    enum FlowStep {
+        case tap(label: String)
+        case typeText(target: String, text: String)
+        case wait(ms: Int)
+        case swipeBack
+    }
+
     struct Step: Identifiable, Equatable {
         let id = UUID()
         let index: Int
         let at: Date
         let action: String           // "tap @ (120, 340)" or "describe-ui"
         let targetLabel: String?     // accessibility label of the tapped element
-        let screenshotPath: URL?     // post-action frame, saved to disk
+        let beforeScreenshot: URL?   // pre-action frame
+        let afterScreenshot: URL?    // post-action frame
+        let verdict: Verdict
+        let bugs: [String]           // vision-check findings, one string per issue
+
+        /// Display alias — some UI callers just want "the relevant frame."
+        var screenshotPath: URL? { afterScreenshot ?? beforeScreenshot }
+
+        enum Verdict: String, Codable, Equatable {
+            case responsive    // the screen changed after the tap
+            case unresponsive  // pre/post pixels identical → dead button
+            case error         // idb tap itself failed
+            case navigation    // used for non-tap steps (swipe-back etc.)
+            case unknown       // verification couldn't run (missing frames)
+        }
     }
 
     @Published private(set) var state: State = .idle
     @Published private(set) var steps: [Step] = []
     @Published private(set) var udid: String?
     @Published private(set) var explorationDir: URL?
+    @Published private(set) var reportURL: URL?
 
     private var isCancelled: Bool = false
     private var maxSteps: Int = 20
     private var tapDelayMs: UInt64 = 700
+    private var deepCheck: Bool = false
 
     // MARK: - Lifecycle
 
     /// Kick off exploration. If idb isn't installed, flips to `.unavailable`
     /// and records why. If no simulator is booted, waits for one to come up
     /// (same pattern as SessionRecorder) before actually exploring.
-    func start(projectDirectory: URL, maxSteps: Int = 20) {
+    func start(projectDirectory: URL, maxSteps: Int = 20, deepCheck: Bool = false) {
         guard state == .idle || state.isFinished else { return }
         self.isCancelled = false
         self.maxSteps = maxSteps
+        self.deepCheck = deepCheck
         self.steps = []
+        self.reportURL = nil
 
         let stamp = Self.timestampString()
         let dir = projectDirectory
@@ -64,6 +111,10 @@ final class AutoExplorer: ObservableObject {
         self.explorationDir = dir
 
         self.state = .waitingForSimulator
+
+        // Load flows now (on main actor with file I/O is cheap) so the
+        // detached task can consume them without worrying about isolation.
+        let flows = Self.loadFlows(in: projectDirectory)
 
         Task.detached { [weak self] in
             // 1. Check idb is on PATH.
@@ -96,8 +147,26 @@ final class AutoExplorer: ObservableObject {
                 self?.state = .exploring
             }
 
-            // 3. Run the exploration loop.
-            await self?.explorationLoop(idb: idb, udid: bootedUDID, dir: dir)
+            // 3. Run scripted flows first (if any), then free exploration.
+            if !flows.isEmpty {
+                await self?.flowsLoop(idb: idb, udid: bootedUDID, dir: dir, flows: flows)
+            }
+            let keepGoing = await MainActor.run { [weak self] in self?.isCancelled == false }
+            if keepGoing {
+                await self?.explorationLoop(idb: idb, udid: bootedUDID, dir: dir)
+            }
+
+            // Always write the final report, regardless of which loops ran.
+            let finalSteps = await MainActor.run { [weak self] in self?.steps ?? [] }
+            TesterReport.write(dir: dir, steps: finalSteps)
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                self.reportURL = dir.appendingPathComponent("report.html")
+                // Don't overwrite .failed — those carry a specific reason the
+                // UI is displaying. Any other state transitions to .finished.
+                if case .failed = self.state { return }
+                self.state = .finished
+            }
         }
     }
 
@@ -113,67 +182,263 @@ final class AutoExplorer: ObservableObject {
     nonisolated private func explorationLoop(idb: String, udid: String, dir: URL) async {
         var stepIndex = 0
         var alreadyTapped: Set<String> = []
+        // "after" of step N is "before" of step N+1 — cache so we save a
+        // ~300ms screenshot call per iteration.
+        var cachedBefore: URL?
 
         while true {
             let cancelled = await MainActor.run { [weak self] in self?.isCancelled ?? true }
             if cancelled { break }
             if await self.shouldStop(at: stepIndex) { break }
 
-            // Describe the accessibility tree.
+            // 1. Capture the current state as this step's "before" frame.
+            let before: URL?
+            if let cached = cachedBefore {
+                before = cached
+            } else {
+                before = await Self.captureFrame(udid: udid, dir: dir,
+                                                 index: stepIndex, suffix: "before")
+            }
+
+            // 2. Describe the accessibility tree and pick a target.
             guard let elements = await Self.describeUI(idb: idb, udid: udid) else {
                 await self.appendStep(Step(
                     index: stepIndex,
                     at: Date(),
                     action: "describe-ui failed",
                     targetLabel: nil,
-                    screenshotPath: nil
+                    beforeScreenshot: before,
+                    afterScreenshot: nil,
+                    verdict: .error,
+                    bugs: []
                 ))
                 break
             }
 
-            // Pick the next tappable element we haven't exercised yet.
             let candidate = Self.nextCandidate(from: elements, skipping: alreadyTapped)
-            guard let target = candidate else {
-                // Dead end — try a back-nav swipe from left edge.
+
+            // 3. Execute the action (tap or swipe-back) and capture "after".
+            let action: String
+            let label: String?
+            var tapStatus: Int32 = 0
+            let isNavigation: Bool
+
+            if let target = candidate {
+                alreadyTapped.insert(target.fingerprint)
+                tapStatus = await Self.tap(idb: idb, udid: udid, x: target.centerX, y: target.centerY)
+                action = "tap @ (\(Int(target.centerX)), \(Int(target.centerY)))"
+                label = target.label
+                isNavigation = false
+            } else {
+                // Dead-end — swipe-back from the left edge to unwind.
                 _ = await Self.swipeBack(idb: idb, udid: udid)
-                let frame = await Self.captureFrame(udid: udid, dir: dir, index: stepIndex)
-                await self.appendStep(Step(
-                    index: stepIndex,
-                    at: Date(),
-                    action: "swipe-back (no new targets)",
-                    targetLabel: nil,
-                    screenshotPath: frame
-                ))
-                stepIndex += 1
-                try? await Task.sleep(nanoseconds: UInt64(self.tapDelayMs) * 1_000_000)
-                continue
+                action = "swipe-back (no new targets)"
+                label = nil
+                isNavigation = true
             }
 
-            alreadyTapped.insert(target.fingerprint)
-            let tapStatus = await Self.tap(idb: idb, udid: udid, x: target.centerX, y: target.centerY)
             try? await Task.sleep(nanoseconds: UInt64(self.tapDelayMs) * 1_000_000)
-            let frame = await Self.captureFrame(udid: udid, dir: dir, index: stepIndex)
+            let after = await Self.captureFrame(udid: udid, dir: dir, index: stepIndex, suffix: "after")
 
-            let action: String
-            if tapStatus == 0 {
-                action = "tap @ (\(Int(target.centerX)), \(Int(target.centerY)))"
+            // 4. Classify the result.
+            let verdict: Step.Verdict
+            if tapStatus != 0 {
+                verdict = .error
+            } else if isNavigation {
+                verdict = .navigation
+            } else if let b = before, let a = after, Self.pixelsIdentical(b, a) {
+                verdict = .unresponsive
+            } else if before != nil && after != nil {
+                verdict = .responsive
             } else {
-                action = "tap failed (idb exit \(tapStatus)) @ (\(Int(target.centerX)), \(Int(target.centerY)))"
+                verdict = .unknown
+            }
+
+            let annotatedAction = (tapStatus != 0)
+                ? "tap failed (idb exit \(tapStatus)) @ \(action.dropFirst(5))"
+                : action
+
+            // Optional: vision pass over the "after" frame to surface layout bugs.
+            // Skipped when the tap errored (the frame didn't really change) or
+            // when the user didn't opt in — each call is a ~3–5s Claude roundtrip.
+            let bugs: [String]
+            let runDeep = await MainActor.run { [weak self] in self?.deepCheck ?? false }
+            if runDeep, let frame = after, verdict != .error {
+                bugs = await Self.analyzeScreen(at: frame)
+            } else {
+                bugs = []
             }
 
             await self.appendStep(Step(
                 index: stepIndex,
                 at: Date(),
-                action: action,
-                targetLabel: target.label,
-                screenshotPath: frame
+                action: annotatedAction,
+                targetLabel: label,
+                beforeScreenshot: before,
+                afterScreenshot: after,
+                verdict: verdict,
+                bugs: bugs
             ))
+
+            cachedBefore = after
             stepIndex += 1
         }
 
-        await MainActor.run { [weak self] in
-            self?.state = .finished
+        // Report writing + final state are handled by the outer Task.detached
+        // in start() so flow-only runs also produce a report.
+    }
+
+    // MARK: - Flow runner
+
+    nonisolated private static func loadFlows(in dir: URL) -> [Flow] {
+        let url = dir.appendingPathComponent("drift.flows.json")
+        guard let data = try? Data(contentsOf: url) else { return [] }
+        do {
+            let rawFlows = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] ?? []
+            return rawFlows.compactMap(Self.parseFlow)
+        } catch {
+            return []
         }
+    }
+
+    nonisolated private static func parseFlow(_ dict: [String: Any]) -> Flow? {
+        guard let name = dict["name"] as? String,
+              let rawSteps = dict["steps"] as? [[String: Any]] else { return nil }
+        let steps = rawSteps.compactMap(Self.parseFlowStep)
+        guard !steps.isEmpty else { return nil }
+        return Flow(name: name, steps: steps)
+    }
+
+    nonisolated private static func parseFlowStep(_ dict: [String: Any]) -> FlowStep? {
+        // Support both `{"tap": "Label"}` and `{"type": {"target": "x", "text": "y"}}`.
+        if let label = dict["tap"] as? String { return .tap(label: label) }
+        if let body = dict["type"] as? [String: Any],
+           let target = body["target"] as? String,
+           let text = body["text"] as? String {
+            return .typeText(target: target, text: text)
+        }
+        if let ms = dict["wait"] as? Int { return .wait(ms: ms) }
+        if dict["swipeBack"] as? Bool == true { return .swipeBack }
+        return nil
+    }
+
+    nonisolated private func flowsLoop(idb: String, udid: String, dir: URL, flows: [Flow]) async {
+        var stepIndex = await MainActor.run { [weak self] in self?.steps.count ?? 0 }
+        var cachedBefore: URL?
+
+        for flow in flows {
+            let cancelled = await MainActor.run { [weak self] in self?.isCancelled ?? true }
+            if cancelled { return }
+
+            // Record a marker step for the flow boundary so the report reads
+            // as a narrative ("=== Sign in ===") rather than a flat list.
+            await self.appendStep(Step(
+                index: stepIndex,
+                at: Date(),
+                action: "▸ flow: \(flow.name)",
+                targetLabel: nil,
+                beforeScreenshot: nil,
+                afterScreenshot: nil,
+                verdict: .navigation,
+                bugs: []
+            ))
+            stepIndex += 1
+
+            for flowStep in flow.steps {
+                let cancelled = await MainActor.run { [weak self] in self?.isCancelled ?? true }
+                if cancelled { return }
+
+                let before: URL?
+                if let cached = cachedBefore {
+                    before = cached
+                } else {
+                    before = await Self.captureFrame(udid: udid, dir: dir,
+                                                     index: stepIndex, suffix: "before")
+                }
+
+                let (action, label, exitStatus) = await Self.performFlowStep(
+                    flowStep, idb: idb, udid: udid
+                )
+
+                try? await Task.sleep(nanoseconds: UInt64(self.tapDelayMs) * 1_000_000)
+                let after = await Self.captureFrame(udid: udid, dir: dir,
+                                                    index: stepIndex, suffix: "after")
+
+                let verdict: Step.Verdict
+                if exitStatus < 0 {
+                    verdict = .error
+                } else if case .wait = flowStep {
+                    verdict = .navigation
+                } else if let b = before, let a = after, Self.pixelsIdentical(b, a) {
+                    verdict = .unresponsive
+                } else if before != nil && after != nil {
+                    verdict = .responsive
+                } else {
+                    verdict = .unknown
+                }
+
+                await self.appendStep(Step(
+                    index: stepIndex,
+                    at: Date(),
+                    action: action,
+                    targetLabel: label,
+                    beforeScreenshot: before,
+                    afterScreenshot: after,
+                    verdict: verdict,
+                    bugs: []
+                ))
+
+                cachedBefore = after
+                stepIndex += 1
+            }
+        }
+    }
+
+    /// Executes a single flow step. Returns (action description, target label,
+    /// exit status). Status < 0 means the step failed outright (e.g., idb
+    /// couldn't find the label); 0 means it ran successfully.
+    nonisolated private static func performFlowStep(_ step: FlowStep, idb: String, udid: String)
+    async -> (String, String?, Int32) {
+        switch step {
+        case .tap(let label):
+            guard let elements = await describeUI(idb: idb, udid: udid),
+                  let target = matchLabel(label, in: elements) else {
+                return ("tap \"\(label)\" (not found)", label, -1)
+            }
+            let status = await tap(idb: idb, udid: udid,
+                                   x: target.centerX, y: target.centerY)
+            return ("tap \"\(label)\"", label, status)
+
+        case .typeText(let target, let text):
+            // Tap the target first to focus the field, then pipe the text.
+            guard let elements = await describeUI(idb: idb, udid: udid),
+                  let el = matchLabel(target, in: elements) else {
+                return ("type into \"\(target)\" (not found)", target, -1)
+            }
+            _ = await tap(idb: idb, udid: udid, x: el.centerX, y: el.centerY)
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            let status = runIDBStatus(idb: idb, args: ["--udid", udid, "ui", "text", text])
+            return ("type \"\(text)\" into \"\(target)\"", target, status)
+
+        case .wait(let ms):
+            try? await Task.sleep(nanoseconds: UInt64(max(0, ms)) * 1_000_000)
+            return ("wait \(ms)ms", nil, 0)
+
+        case .swipeBack:
+            let status = await swipeBack(idb: idb, udid: udid)
+            return ("swipe-back", nil, status)
+        }
+    }
+
+    /// Fuzzy label match — prefer exact case-insensitive, fall back to
+    /// containment. Small enough that a tester yaml using natural labels
+    /// ("Sign In", "Continue") usually just works.
+    nonisolated private static func matchLabel(_ query: String, in elements: [UIElement]) -> UIElement? {
+        let needle = query.lowercased()
+        if let exact = elements.first(where: { ($0.label ?? "").lowercased() == needle }) {
+            return exact
+        }
+        return elements.first { ($0.label ?? "").lowercased().contains(needle) }
     }
 
     // MARK: - State hop helpers (to make the @MainActor cross clean)
@@ -262,8 +527,11 @@ final class AutoExplorer: ObservableObject {
                                        "0", "400", "300", "400", "--duration", "0.2"])
     }
 
-    nonisolated private static func captureFrame(udid: String, dir: URL, index: Int) async -> URL? {
-        let url = dir.appendingPathComponent(String(format: "step-%03d.png", index))
+    nonisolated private static func captureFrame(udid: String, dir: URL, index: Int, suffix: String = "") async -> URL? {
+        let name: String = suffix.isEmpty
+            ? String(format: "step-%03d.png", index)
+            : String(format: "step-%03d-%@.png", index, suffix)
+        let url = dir.appendingPathComponent(name)
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
         proc.arguments = ["simctl", "io", udid, "screenshot", url.path]
@@ -274,6 +542,109 @@ final class AutoExplorer: ObservableObject {
             proc.waitUntilExit()
         } catch { return nil }
         return proc.terminationStatus == 0 ? url : nil
+    }
+
+    /// Ship a screenshot to Claude with a tight bug-finding prompt. Expects a
+    /// JSON array of short bug descriptions back; anything else is treated as
+    /// "no bugs found" so a chatty model can't pollute the report with prose.
+    /// The call is opt-in (deepCheck) — each one is ~3–5s, which would turn a
+    /// 20-step run into a 1–2 minute thing.
+    nonisolated private static func analyzeScreen(at frame: URL) async -> [String] {
+        guard let claude = findClaude() else { return [] }
+        let prompt = """
+        You are auditing an iOS app screenshot for visual/layout bugs a real user would notice.
+        Screenshot: \(frame.path)
+
+        Read the screenshot and respond with ONLY a JSON array of short strings, each one
+        describing a single visible bug. Focus on: text clipping, misalignment, overlapping
+        elements, broken/missing images, unreadable color contrast, cut-off labels, UI elements
+        that look incomplete. Ignore design-preference nits — only things that look broken.
+
+        Return [] when nothing is wrong. Respond with ONLY the JSON array, no other text.
+        """
+        let raw = runClaude(claude: claude, prompt: prompt, timeout: 20)
+        return parseBugs(from: raw)
+    }
+
+    nonisolated private static func runClaude(claude: String, prompt: String, timeout: TimeInterval) -> String {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: claude)
+        proc.arguments = ["-p", prompt,
+                          "--model", "claude-opus-4-7",
+                          "--dangerously-skip-permissions",
+                          "--output-format", "text"]
+        var env = ProcessInfo.processInfo.environment
+        for k in ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL",
+                  "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX"] {
+            env.removeValue(forKey: k)
+        }
+        proc.environment = env
+
+        let out = Pipe()
+        proc.standardOutput = out
+        proc.standardError = Pipe()
+        do { try proc.run() } catch { return "" }
+
+        // Hard timeout so a wedged claude call can't pause the whole tester.
+        let deadline = Date().addingTimeInterval(timeout)
+        DispatchQueue.global().async {
+            while proc.isRunning && Date() < deadline {
+                Thread.sleep(forTimeInterval: 0.2)
+            }
+            if proc.isRunning { proc.terminate() }
+        }
+
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        proc.waitUntilExit()
+        return String(data: data, encoding: .utf8) ?? ""
+    }
+
+    nonisolated private static func parseBugs(from raw: String) -> [String] {
+        // Claude may bracket the JSON with explanatory text — scan for the
+        // first `[` and the last `]` and parse the slice between them.
+        guard let start = raw.firstIndex(of: "["),
+              let end = raw.lastIndex(of: "]"),
+              start < end else { return [] }
+        let slice = String(raw[start...end])
+        guard let data = slice.data(using: .utf8),
+              let arr = try? JSONSerialization.jsonObject(with: data) as? [String] else {
+            return []
+        }
+        return arr
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .prefix(10)
+            .map { String($0) }
+    }
+
+    nonisolated private static func findClaude() -> String? {
+        // Cheap duplicate of DriftSession.findClaude — kept local to avoid
+        // cross-file actor-isolation tangles.
+        let which = Process()
+        which.executableURL = URL(fileURLWithPath: "/bin/bash")
+        which.arguments = ["-lc", "command -v claude || true"]
+        let pipe = Pipe()
+        which.standardOutput = pipe
+        which.standardError = Pipe()
+        try? which.run()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        which.waitUntilExit()
+        let found = String(data: data, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !found.isEmpty, FileManager.default.isExecutableFile(atPath: found) { return found }
+        let candidates = ["/opt/homebrew/bin/claude", "/usr/local/bin/claude"]
+        return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
+    }
+
+    /// Byte-wise compare two PNGs. Equal bytes ⇒ equal pixels ⇒ the tap
+    /// produced no visible change — the cheapest dead-button detector we can
+    /// build without reaching for an LLM. Returns false on any read error so
+    /// we don't falsely flag things as responsive.
+    nonisolated private static func pixelsIdentical(_ a: URL, _ b: URL) -> Bool {
+        guard let da = try? Data(contentsOf: a),
+              let db = try? Data(contentsOf: b) else { return false }
+        if da.count != db.count { return false }
+        return SHA256.hash(data: da) == SHA256.hash(data: db)
     }
 
     // MARK: - Helpers
