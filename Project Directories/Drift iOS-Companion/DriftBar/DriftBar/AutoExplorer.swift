@@ -467,7 +467,7 @@ final class AutoExplorer: ObservableObject {
             }
             _ = await tap(idb: idb, udid: udid, x: el.centerX, y: el.centerY)
             try? await Task.sleep(nanoseconds: 250_000_000)
-            let status = runIDBStatus(idb: idb, args: ["--udid", udid, "ui", "text", text])
+            let status = runIDBStatus(idb: idb, args: ["ui", "text", text, "--udid", udid])
             return ("type \"\(text)\" into \"\(target)\"", target, status)
 
         case .wait(let ms):
@@ -514,9 +514,11 @@ final class AutoExplorer: ObservableObject {
     }
 
     nonisolated private static func describeUI(idb: String, udid: String) async -> [UIElement]? {
-        // `describe-all` has no `--json` flag in fb-idb — it always prints
-        // JSON to stdout. Passing one makes argparse reject the command.
-        let out = runIDB(idb: idb, args: ["--udid", udid, "ui", "describe-all"])
+        // `--udid` is subcommand-local in fb-idb 1.1.7 (positional order:
+        // subcommand → flags), not a top-level flag as the repo's main
+        // branch suggests. Without `--json` the output isn't stable JSON.
+        // Verified against a real idb install.
+        let out = runIDB(idb: idb, args: ["ui", "describe-all", "--udid", udid, "--json"])
         guard !out.isEmpty else { return nil }
         guard let data = out.data(using: .utf8),
               let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
@@ -561,13 +563,16 @@ final class AutoExplorer: ObservableObject {
     /// instead of silently claiming success on an invalid coordinate or
     /// dropped device connection.
     nonisolated private static func tap(idb: String, udid: String, x: Double, y: Double) async -> Int32 {
-        runIDBStatus(idb: idb, args: ["--udid", udid, "ui", "tap",
-                                       String(Int(x)), String(Int(y))])
+        runIDBStatus(idb: idb, args: ["ui", "tap",
+                                       String(Int(x)), String(Int(y)),
+                                       "--udid", udid])
     }
 
     nonisolated private static func swipeBack(idb: String, udid: String) async -> Int32 {
-        runIDBStatus(idb: idb, args: ["--udid", udid, "ui", "swipe",
-                                       "0", "400", "300", "400", "--duration", "0.2"])
+        runIDBStatus(idb: idb, args: ["ui", "swipe",
+                                       "0", "400", "300", "400",
+                                       "--duration", "0.2",
+                                       "--udid", udid])
     }
 
     nonisolated private static func captureFrame(udid: String, dir: URL, index: Int, suffix: String = "") async -> URL? {
